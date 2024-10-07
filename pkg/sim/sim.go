@@ -3034,13 +3034,13 @@ func (s *Sim) ExpectApproach(token, callsign, approach string) error {
 		})
 }
 
-func (s *Sim) LookForAirport(token, callsign, runway string) error { // TODO: better function name?
+func (s *Sim) LookForAirport(token, callsign string) error {
 	s.mu.Lock(s.lg)
 	defer s.mu.Unlock(s.lg)
 
 	return s.dispatchControllingCommand(token, callsign, func(ctrl *av.Controller, ac *av.Aircraft) []av.RadioTransmission {
 		metar := s.State.METAR[ac.FlightPlan.ArrivalAirport]
-		return ac.LookForAirport(runway, metar, s.lg)
+		return ac.LookForAirport(metar, s.lg)
 	})
 }
 

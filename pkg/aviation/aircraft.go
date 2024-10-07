@@ -287,7 +287,7 @@ func (ac *Aircraft) AtFixCleared(fix, approach string) []RadioTransmission {
 	return ac.transmitResponse(ac.Nav.AtFixCleared(fix, approach))
 }
 
-func (ac *Aircraft) LookForAirport(runway string, metar *METAR, lg *log.Logger) []RadioTransmission {
+func (ac *Aircraft) LookForAirport(metar *METAR, lg *log.Logger) []RadioTransmission {
 	// is the field IFR?
 	wxStr := metar.String()
 	r := regexp.MustCompile(`(?P<visibility>\d{2}SM)(?:.*?(?P<ceiling>(BKN|OVC)\d{3}))?`)
