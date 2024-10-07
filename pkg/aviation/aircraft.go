@@ -7,7 +7,9 @@ package aviation
 import (
 	"fmt"
 	"log/slog"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -63,6 +65,7 @@ type Aircraft struct {
 	STAR                string
 	STARRunwayWaypoints map[string]WaypointArray
 	GotContactTower     bool
+	FieldInSight        bool
 
 	// Who to try to hand off to at a waypoint with /ho
 	WaypointHandoffController string
@@ -282,6 +285,23 @@ func (ac *Aircraft) ExpectApproach(id string, ap *Airport, lg *log.Logger) []Rad
 
 func (ac *Aircraft) AtFixCleared(fix, approach string) []RadioTransmission {
 	return ac.transmitResponse(ac.Nav.AtFixCleared(fix, approach))
+}
+
+func (ac *Aircraft) LookForAirport(runway string, metar *METAR, lg *log.Logger) []RadioTransmission {
+	// is the field IFR?
+	wxStr := metar.String()
+	r := regexp.MustCompile(`(?P<visibility>\d{2}SM)(?:.*?(?P<ceiling>(BKN|OVC)\d{3}))?`)
+	matches := r.FindStringSubmatch(wxStr)
+	vis, _ := strconv.Atoi(matches[r.SubexpIndex("visibility")])
+	ceiling, _ := strconv.Atoi(matches[r.SubexpIndex("ceiling")])
+	if vis <= 3 || ceiling <= 10 {
+		// fields ifr, cant find it
+		return ac.readback("we're looking")
+	}
+
+	// vfr, report in sight
+	ac.FieldInSight = true
+	return ac.readback("field in sight")
 }
 
 func (ac *Aircraft) ClearedApproach(id string, lg *log.Logger) []RadioTransmission {
