@@ -289,15 +289,20 @@ func (ac *Aircraft) AtFixCleared(fix, approach string) []RadioTransmission {
 }
 
 func (ac *Aircraft) LookForAirport(metar *METAR, lg *log.Logger) []RadioTransmission {
-	// is the field IFR?
-	wxStr := metar.String()
-	r := regexp.MustCompile(`(?P<visibility>\d{2}SM)(?:.*?(?P<ceiling>(BKN|OVC)\d{3}))?`)
-	matches := r.FindStringSubmatch(wxStr)
-	vis, _ := strconv.Atoi(matches[r.SubexpIndex("visibility")])
-	ceiling, _ := strconv.Atoi(matches[r.SubexpIndex("ceiling")])
-	if vis <= 3 || ceiling <= 10 {
-		// fields ifr, cant find it
-		return ac.readback("we're looking")
+	if metar.Weather == "" {
+		// no live weather (there may be a better way to check this but I haven't found it)
+		// TODO: implement IMC toggle in scenario definitions and base it off that
+	} else {
+		// is the field IFR?
+		wxStr := metar.String()
+		r := regexp.MustCompile(`(?P<visibility>\d{2}SM)(?:.*?(?P<ceiling>(BKN|OVC)\d{3}))?`)
+		matches := r.FindStringSubmatch(wxStr)
+		vis, _ := strconv.Atoi(matches[r.SubexpIndex("visibility")])
+		ceiling, _ := strconv.Atoi(matches[r.SubexpIndex("ceiling")])
+		if vis <= 3 || ceiling <= 10 {
+			// fields ifr, cant find it
+			return ac.readback("we're looking")
+		}
 	}
 
 	// vfr, report in sight

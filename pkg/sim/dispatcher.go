@@ -539,6 +539,8 @@ func (sd *Dispatcher) RunAircraftCommands(cmds *AircraftCommandsArgs, result *Ai
 					rewriteError(err)
 					return nil
 				}
+			} else if command[1] == '/' {
+				sim.LookForAirport(token, callsign)
 			}
 		case 'H':
 			if len(command) == 1 {
