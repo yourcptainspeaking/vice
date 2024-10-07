@@ -312,6 +312,7 @@ type NewSimConfiguration struct {
 	RequirePassword bool   // for create remote only
 	Password        string // for create remote only
 	NewSimType      int
+	TFRs            []av.TFR
 
 	LiveWeather               bool
 	SelectedRemoteSim         string
@@ -323,9 +324,11 @@ type NewSimConfiguration struct {
 
 	DisplayError error
 
+	// Local use only; not sent to the server when we create one.
 	mgr           *ConnectionManager
 	lg            *log.Logger
 	defaultTRACON *string
+	tfrCache      *av.TFRCache
 }
 
 type RemoteSim struct {
@@ -343,12 +346,13 @@ const (
 	NewSimJoinRemote
 )
 
-func MakeNewSimConfiguration(mgr *ConnectionManager, defaultTRACON *string, lg *log.Logger) *NewSimConfiguration {
+func MakeNewSimConfiguration(mgr *ConnectionManager, defaultTRACON *string, tfrCache *av.TFRCache, lg *log.Logger) *NewSimConfiguration {
 	c := &NewSimConfiguration{
 		lg:             lg,
 		mgr:            mgr,
 		selectedServer: mgr.localServer,
 		defaultTRACON:  defaultTRACON,
+		tfrCache:       tfrCache,
 		NewSimName:     rand.AdjectiveNoun(),
 	}
 
@@ -829,6 +833,8 @@ func (c *NewSimConfiguration) OkDisabled() bool {
 }
 
 func (c *NewSimConfiguration) Start() error {
+	c.TFRs = c.tfrCache.TFRsForTRACON(c.TRACONName, c.lg)
+
 	var result NewSimResult
 	if err := c.selectedServer.CallWithTimeout("SimManager.New", c, &result); err != nil {
 		err = TryDecodeError(err)
@@ -878,6 +884,7 @@ type Sim struct {
 
 	eventStream *EventStream
 	lg          *log.Logger
+	mapManifest *av.VideoMapManifest
 
 	LaunchConfig LaunchConfig
 
@@ -961,7 +968,7 @@ func (sc *ServerController) LogValue() slog.Value {
 }
 
 func NewSim(ssc NewSimConfiguration, scenarioGroups map[string]map[string]*ScenarioGroup, isLocal bool,
-	mapLib *av.VideoMapLibrary, lg *log.Logger) *Sim {
+	manifests map[string]*av.VideoMapManifest, lg *log.Logger) *Sim {
 	lg = lg.With(slog.String("sim_name", ssc.NewSimName))
 
 	tracon, ok := scenarioGroups[ssc.TRACONName]
@@ -993,6 +1000,7 @@ func NewSim(ssc NewSimConfiguration, scenarioGroups map[string]map[string]*Scena
 
 		eventStream: NewEventStream(lg),
 		lg:          lg,
+		mapManifest: manifests[sg.STARSFacilityAdaptation.VideoMapFile],
 
 		ReportingPoints: sg.ReportingPoints,
 
@@ -1039,7 +1047,8 @@ func NewSim(ssc NewSimConfiguration, scenarioGroups map[string]map[string]*Scena
 		add(sc.SoloController)
 	}
 
-	s.State = newState(ssc.Scenario.SelectedSplit, ssc.LiveWeather, isLocal, s, sg, sc, mapLib, lg)
+	s.State = newState(ssc.Scenario.SelectedSplit, ssc.LiveWeather, isLocal, s, sg, sc, s.mapManifest,
+		ssc.TFRs, lg)
 
 	s.setInitialSpawnTimes()
 
@@ -1224,6 +1233,8 @@ type WorldUpdate struct {
 
 	LaunchConfig LaunchConfig
 
+	UserRestrictionAreas []RestrictionArea
+
 	SimIsPaused      bool
 	SimRate          float32
 	Events           []Event
@@ -1251,24 +1262,25 @@ func (s *Sim) GetWorldUpdate(token string, update *WorldUpdate) error {
 
 		var err error
 		*update, err = deep.Copy(WorldUpdate{
-			Aircraft:         s.State.Aircraft,
-			Controllers:      s.State.Controllers,
-			ERAMComputers:    s.State.ERAMComputers,
-			Time:             s.SimTime,
-			LaunchConfig:     s.LaunchConfig,
-			SimIsPaused:      s.Paused,
-			SimRate:          s.SimRate,
-			Events:           ctrl.events.Get(),
-			TotalDepartures:  s.TotalDepartures,
-			TotalArrivals:    s.TotalArrivals,
-			TotalOverflights: s.TotalOverflights,
+			Aircraft:             s.State.Aircraft,
+			Controllers:          s.State.Controllers,
+			ERAMComputers:        s.State.ERAMComputers,
+			Time:                 s.SimTime,
+			LaunchConfig:         s.LaunchConfig,
+			SimIsPaused:          s.Paused,
+			SimRate:              s.SimRate,
+			Events:               ctrl.events.Get(),
+			TotalDepartures:      s.TotalDepartures,
+			TotalArrivals:        s.TotalArrivals,
+			TotalOverflights:     s.TotalOverflights,
+			UserRestrictionAreas: s.State.UserRestrictionAreas,
 		})
 
 		return err
 	}
 }
 
-func (s *Sim) Activate(ml *av.VideoMapLibrary, lg *log.Logger) {
+func (s *Sim) Activate(lg *log.Logger) {
 	if s.Name == "" {
 		s.lg = lg
 	} else {
@@ -1285,7 +1297,7 @@ func (s *Sim) Activate(ml *av.VideoMapLibrary, lg *log.Logger) {
 	now := time.Now()
 	s.lastUpdateTime = now
 
-	s.State.Activate(ml, s.lg)
+	s.State.Activate(s.lg)
 }
 
 ///////////////////////////////////////////////////////////////////////////
@@ -1488,8 +1500,10 @@ func (s *Sim) updateState() {
 				if d, err := ac.DistanceToEndOfApproach(); err == nil && d < *ac.GoAroundDistance {
 					s.lg.Info("randomly going around")
 					ac.GoAroundDistance = nil // only go around once
-					rt := ac.GoAround()
+					// Update controller before calling GoAround so the
+					// transmission goes to the right controller.
 					ac.ControllingController = s.State.DepartureController(ac, s.lg)
+					rt := ac.GoAround()
 					PostRadioEvents(ac.Callsign, rt, s)
 
 					// If it was handed off to tower, hand it back to us
@@ -3494,4 +3508,60 @@ func (s *Sim) createOverflightNoLock(group string) (*av.Aircraft, error) {
 	*/
 
 	return ac, nil
+}
+
+func (s *Sim) CreateRestrictionArea(ra RestrictionArea) (int, error) {
+	ra.UpdateTriangles()
+
+	// Look for a free slot from one that was deleted
+	for i, ua := range s.State.UserRestrictionAreas {
+		if ua.Deleted {
+			s.State.UserRestrictionAreas[i] = ra
+			return i + 1, nil
+		}
+	}
+
+	if n := len(s.State.UserRestrictionAreas); n < MaxRestrictionAreas {
+		s.State.UserRestrictionAreas = append(s.State.UserRestrictionAreas, ra)
+		return n + 1, nil
+	}
+
+	return 0, ErrTooManyRestrictionAreas
+}
+
+func (s *Sim) UpdateRestrictionArea(idx int, ra RestrictionArea) error {
+	// Adjust for one-based indexing in the API call
+	idx--
+
+	if idx < 0 || idx >= len(s.State.UserRestrictionAreas) {
+		return ErrInvalidRestrictionAreaIndex
+	}
+	if s.State.UserRestrictionAreas[idx].Deleted {
+		return ErrInvalidRestrictionAreaIndex
+	}
+
+	// Update the triangulation just in case it's been moved.
+	ra.UpdateTriangles()
+
+	s.State.UserRestrictionAreas[idx] = ra
+	return nil
+}
+
+func (s *Sim) DeleteRestrictionArea(idx int) error {
+	// Adjust for one-based indexing in the API call
+	idx--
+
+	if idx < 0 || idx >= len(s.State.UserRestrictionAreas) {
+		return ErrInvalidRestrictionAreaIndex
+	}
+	if s.State.UserRestrictionAreas[idx].Deleted {
+		return ErrInvalidRestrictionAreaIndex
+	}
+
+	s.State.UserRestrictionAreas[idx] = RestrictionArea{Deleted: true}
+	return nil
+}
+
+func (s *Sim) GetVideoMapLibrary(filename string) (*av.VideoMapLibrary, error) {
+	return av.LoadVideoMapLibrary(filename)
 }

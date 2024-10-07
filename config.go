@@ -9,10 +9,11 @@ import (
 	"encoding/json"
 	"io"
 	"os"
-	"path"
+	"path/filepath"
 	"strings"
+	"time"
 
-	"github.com/mmp/imgui-go/v4"
+	av "github.com/mmp/vice/pkg/aviation"
 	"github.com/mmp/vice/pkg/log"
 	"github.com/mmp/vice/pkg/panes"
 	"github.com/mmp/vice/pkg/panes/stars"
@@ -20,6 +21,8 @@ import (
 	"github.com/mmp/vice/pkg/renderer"
 	"github.com/mmp/vice/pkg/sim"
 	"github.com/mmp/vice/pkg/util"
+
+	"github.com/mmp/imgui-go/v4"
 )
 
 // Version history 0-7 not explicitly recorded
@@ -44,7 +47,9 @@ import (
 // 26: make allow_long_scratchpad a single bool
 // 27: rework prefs, videomaps
 // 28: new departure flow
-const CurrentConfigVersion = 28
+// 29: TFR cache
+// 30: video map improvements
+const CurrentConfigVersion = 30
 
 // Slightly convoluted, but the full Config definition is split into
 // the part with the Sim and the rest of it.  In this way, we can first
@@ -69,9 +74,11 @@ type ConfigNoSim struct {
 
 	DisplayRoot *panes.DisplayNode
 
-	AskedDiscordOptIn        bool
-	InhibitDiscordActivity   util.AtomicBool
-	NotifiedNewCommandSyntax bool
+	TFRCache av.TFRCache
+
+	AskedDiscordOptIn      bool
+	InhibitDiscordActivity util.AtomicBool
+	NotifiedTargetGenMode  bool
 
 	Callsign string
 }
@@ -87,13 +94,13 @@ func configFilePath(lg *log.Logger) string {
 		dir = "."
 	}
 
-	dir = path.Join(dir, "Vice")
+	dir = filepath.Join(dir, "Vice")
 	err = os.MkdirAll(dir, 0o700)
 	if err != nil {
 		lg.Errorf("%s: unable to make directory for config file: %v", dir, err)
 	}
 
-	return path.Join(dir, "config.json")
+	return filepath.Join(dir, "config.json")
 }
 
 func (gc *Config) Encode(w io.Writer) error {
@@ -130,6 +137,7 @@ func (gc *Config) SaveIfChanged(renderer renderer.Renderer, platform platform.Pl
 	gc.ImGuiSettings = imgui.SaveIniSettingsToMemory()
 	gc.InitialWindowSize = platform.WindowSize()
 	gc.InitialWindowPosition = platform.WindowPosition()
+	gc.TFRCache.Sync(100*time.Millisecond, lg)
 
 	fn := configFilePath(lg)
 	onDisk, err := os.ReadFile(fn)
@@ -161,9 +169,10 @@ func getDefaultConfig() *Config {
 				AudioEnabled:          true,
 				InitialWindowPosition: [2]int{100, 100},
 			},
-			Version:                  CurrentConfigVersion,
-			WhatsNewIndex:            len(whatsNew),
-			NotifiedNewCommandSyntax: true, // don't warn for new installs
+			TFRCache:              av.MakeTFRCache(),
+			Version:               CurrentConfigVersion,
+			WhatsNewIndex:         len(whatsNew),
+			NotifiedTargetGenMode: true, // don't warn for new installs
 		},
 	}
 }
@@ -194,6 +203,9 @@ func LoadOrMakeDefaultConfig(lg *log.Logger) (config *Config, configErr error) {
 		if config.Version < 24 {
 			config.AudioEnabled = true
 		}
+		if config.Version < 29 {
+			config.TFRCache = av.MakeTFRCache()
+		}
 
 		if config.Version < CurrentConfigVersion {
 			if config.DisplayRoot != nil {
@@ -218,6 +230,8 @@ func LoadOrMakeDefaultConfig(lg *log.Logger) (config *Config, configErr error) {
 		config.UIFontSize = 16
 	}
 	config.Version = CurrentConfigVersion
+
+	config.TFRCache.UpdateAsync(lg)
 
 	imgui.LoadIniSettingsFromMemory(config.ImGuiSettings)
 

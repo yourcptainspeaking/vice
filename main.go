@@ -41,6 +41,7 @@ var (
 	cpuprofile        = flag.String("cpuprofile", "", "write CPU profile to file")
 	memprofile        = flag.String("memprofile", "", "write memory profile to this file")
 	logLevel          = flag.String("loglevel", "info", "logging level: debug, info, warn, error")
+	logDir            = flag.String("logdir", "", "log file directory")
 	lintScenarios     = flag.Bool("lint", false, "check the validity of the built-in scenarios")
 	server            = flag.Bool("runserver", false, "run vice scenario server")
 	serverPort        = flag.Int("port", sim.ViceServerPort, "port to listen on when running server")
@@ -75,7 +76,7 @@ func main() {
 	}
 
 	// Initialize the logging system first and foremost.
-	lg := log.New(*server, *logLevel)
+	lg := log.New(*server, *logLevel, *logDir)
 
 	profiler, err := util.CreateProfiler(*cpuprofile, *memprofile)
 	if err != nil {
@@ -91,6 +92,19 @@ func main() {
 		var e util.ErrorLogger
 		scenarioGroups, _, _ :=
 			sim.LoadScenarioGroups(true, *scenarioFilename, *videoMapFilename, &e, lg)
+
+		videoMaps := make(map[string]interface{})
+		for _, sgs := range scenarioGroups {
+			for _, sg := range sgs {
+				if sg.STARSFacilityAdaptation.VideoMapFile != "" {
+					videoMaps[sg.STARSFacilityAdaptation.VideoMapFile] = nil
+				}
+			}
+		}
+		for m := range videoMaps {
+			av.CheckVideoMapManifest(m, &e)
+		}
+
 		if e.HaveErrors() {
 			e.PrintErrors(nil)
 			os.Exit(1)
@@ -157,10 +171,12 @@ func main() {
 		var controlClient *sim.ControlClient
 		var mgr *sim.ConnectionManager
 		var err error
-		mgr, err = sim.MakeServerConnection(*serverAddress, *scenarioFilename, *videoMapFilename, lg,
+		var simErrorLogger util.ErrorLogger
+		mgr, err = sim.MakeServerConnection(*serverAddress, *scenarioFilename, *videoMapFilename,
+			&simErrorLogger, lg,
 			func(c *sim.ControlClient) { // updated client
 				if c != nil {
-					panes.ResetSim(config.DisplayRoot, c.State, plat, lg)
+					panes.ResetSim(config.DisplayRoot, c, c.State, plat, lg)
 				}
 				uiResetControlClient(c)
 				controlClient = c
@@ -210,12 +226,16 @@ func main() {
 
 		config.Activate(render, plat, eventStream, lg)
 
+		if simErrorLogger.HaveErrors() { // After we have plat and render
+			ShowFatalErrorDialog(render, plat, lg, "%s", simErrorLogger.String())
+		}
+
 		// After config.Activate(), if we have a loaded sim, get configured for it.
 		if config.Sim != nil && !*resetSim {
 			if client, err := mgr.LoadLocalSim(config.Sim, lg); err != nil {
 				lg.Errorf("Error loading local sim: %v", err)
 			} else {
-				panes.LoadedSim(config.DisplayRoot, client.State, plat, lg)
+				panes.LoadedSim(config.DisplayRoot, client, client.State, plat, lg)
 				uiResetControlClient(client)
 				controlClient = client
 			}

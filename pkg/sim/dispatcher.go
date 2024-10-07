@@ -370,14 +370,8 @@ func (sd *Dispatcher) RunAircraftCommands(cmds *AircraftCommandsArgs, result *Ai
 	for i, command := range commands {
 		rewriteError := func(err error) {
 			result.RemainingInput = strings.Join(commands[i:], " ")
-
-			switch err {
-			case nil:
-				//
-			case av.ErrOtherControllerHasTrack:
-				result.ErrorMessage = "Another controller is controlling this aircraft"
-			default:
-				result.ErrorMessage = "Invalid or unknown command"
+			if err != nil {
+				result.ErrorMessage = err.Error()
 			}
 		}
 
@@ -832,4 +826,56 @@ func (sd *Dispatcher) CreateOverflight(oa *CreateOverflightArgs, ofAc *av.Aircra
 		*ofAc = *ac
 	}
 	return err
+}
+
+type RestrictionAreaArgs struct {
+	ControllerToken string
+	Index           int
+	RestrictionArea RestrictionArea
+}
+
+func (sd *Dispatcher) CreateRestrictionArea(ra *RestrictionAreaArgs, idx *int) error {
+	sim, ok := sd.sm.controllerTokenToSim[ra.ControllerToken]
+	if !ok {
+		return ErrNoSimForControllerToken
+	}
+	i, err := sim.CreateRestrictionArea(ra.RestrictionArea)
+	if err == nil {
+		*idx = i
+	}
+	return err
+}
+
+func (sd *Dispatcher) UpdateRestrictionArea(ra *RestrictionAreaArgs, _ *struct{}) error {
+	sim, ok := sd.sm.controllerTokenToSim[ra.ControllerToken]
+	if !ok {
+		return ErrNoSimForControllerToken
+	}
+	return sim.UpdateRestrictionArea(ra.Index, ra.RestrictionArea)
+}
+
+func (sd *Dispatcher) DeleteRestrictionArea(ra *RestrictionAreaArgs, _ *struct{}) error {
+	sim, ok := sd.sm.controllerTokenToSim[ra.ControllerToken]
+	if !ok {
+		return ErrNoSimForControllerToken
+	}
+	return sim.DeleteRestrictionArea(ra.Index)
+}
+
+type VideoMapsArgs struct {
+	ControllerToken string
+	Filename        string
+}
+
+func (sd *Dispatcher) GetVideoMapLibrary(vm *VideoMapsArgs, vmf *av.VideoMapLibrary) error {
+	sim, ok := sd.sm.controllerTokenToSim[vm.ControllerToken]
+	if !ok {
+		return ErrNoSimForControllerToken
+	}
+	if v, err := sim.GetVideoMapLibrary(vm.Filename); err == nil {
+		*vmf = *v
+		return nil
+	} else {
+		return err
+	}
 }

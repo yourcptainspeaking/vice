@@ -20,6 +20,9 @@ import (
 	"github.com/mmp/vice/pkg/log"
 	"github.com/mmp/vice/pkg/math"
 	"github.com/mmp/vice/pkg/util"
+
+	"github.com/brunoga/deep"
+	"github.com/mmp/earcut-go"
 )
 
 type ScenarioGroup struct {
@@ -94,6 +97,7 @@ type STARSFacilityAdaptation struct {
 		DisplayAltExitGate bool `json:"display_alternate_exit_gate"`
 	} `json:"scratchpad1"`
 	CoordinationLists []CoordinationList `json:"coordination_lists"`
+	RestrictionAreas  []RestrictionArea  `json:"restriction_areas"`
 }
 
 type STARSControllerConfig struct {
@@ -105,9 +109,10 @@ type STARSControllerConfig struct {
 }
 
 type CoordinationList struct {
-	Name     string   `json:"name"`
-	Id       string   `json:"id"`
-	Airports []string `json:"airports"`
+	Name          string   `json:"name"`
+	Id            string   `json:"id"`
+	Airports      []string `json:"airports"`
+	YellowEntries bool     `json:"yellow_entries"`
 }
 
 type SignificantPoint struct {
@@ -116,6 +121,27 @@ type SignificantPoint struct {
 	Abbreviation string        `json:"abbreviation"`
 	Description  string        `json:"description"`
 	Location     math.Point2LL `json:"location"`
+}
+
+// This many adapted and then this many user-defined
+const MaxRestrictionAreas = 100
+
+type RestrictionArea struct {
+	Title        string           `json:"title"`
+	Text         [2]string        `json:"text"`
+	BlinkingText bool             `json:"blinking_text"`
+	HideId       bool             `json:"hide_id"`
+	TextPosition math.Point2LL    `json:"text_position"`
+	CircleCenter math.Point2LL    `json:"circle_center"`
+	CircleRadius float32          `json:"circle_radius"`
+	VerticesUser av.WaypointArray `json:"vertices"`
+	Vertices     [][]math.Point2LL
+	Closed       bool `json:"closed"`
+	Shaded       bool `json:"shade_region"`
+	Color        int  `json:"color"`
+
+	Tris    [][3]math.Point2LL
+	Deleted bool
 }
 
 type Airspace struct {
@@ -171,7 +197,7 @@ type ScenarioGroupArrivalRunway struct {
 	Runway  string `json:"runway"`
 }
 
-func (s *Scenario) PostDeserialize(sg *ScenarioGroup, e *util.ErrorLogger) {
+func (s *Scenario) PostDeserialize(sg *ScenarioGroup, e *util.ErrorLogger, manifest *av.VideoMapManifest) {
 	// Temporary backwards-compatibility for inbound flows
 	if len(s.ArrivalGroupDefaultRates) > 0 {
 		if len(s.InboundFlowDefaultRates) > 0 {
@@ -667,9 +693,9 @@ func (s *Scenario) PostDeserialize(sg *ScenarioGroup, e *util.ErrorLogger) {
 		}
 
 		for _, dm := range s.DefaultMaps {
-			if !slices.ContainsFunc(fa.VideoMapNames,
-				func(m string) bool { return m == dm }) {
-				e.ErrorString("video map %q not found in \"stars_maps\"", dm)
+			if !manifest.HasMap(dm) {
+				e.ErrorString("video map %q in \"default_maps\" not found. Use -listmaps "+
+					"<path to Zxx-videomaps.gob.zst> to show available video maps for an ARTCC.", dm)
 			}
 		}
 	} else if len(fa.ControllerConfigs) > 0 {
@@ -719,7 +745,8 @@ var (
 	reFixHeadingDistance = regexp.MustCompile(`^([\w-]{3,})@([\d]{3})/(\d+(\.\d+)?)$`)
 )
 
-func (sg *ScenarioGroup) PostDeserialize(multiController bool, e *util.ErrorLogger, simConfigurations map[string]map[string]*Configuration) {
+func (sg *ScenarioGroup) PostDeserialize(multiController bool, e *util.ErrorLogger, simConfigurations map[string]map[string]*Configuration,
+	manifest *av.VideoMapManifest) {
 	// Temporary backwards compatibility for inbound flows
 	if len(sg.ArrivalGroups) > 0 {
 		if len(sg.InboundFlows) > 0 {
@@ -753,7 +780,7 @@ func (sg *ScenarioGroup) PostDeserialize(multiController bool, e *util.ErrorLogg
 	if sg.TRACON == "" {
 		e.ErrorString("\"tracon\" must be specified")
 	} else if _, ok := av.DB.TRACONs[sg.TRACON]; !ok {
-		e.ErrorString("TRACON %s is unknown; it must be a 3-letter identifier listed at "+
+		e.ErrorString("TRACON %q is unknown; it must be a 3-letter identifier listed at "+
 			"https://www.faa.gov/about/office_org/headquarters_offices/ato/service_units/air_traffic_services/tracon.",
 			sg.TRACON)
 	}
@@ -783,12 +810,7 @@ func (sg *ScenarioGroup) PostDeserialize(multiController bool, e *util.ErrorLogg
 				e.ErrorString("distance %q: %v", strs[3], err)
 			} else {
 				// Offset along the given heading and distance from the fix.
-				p := math.LL2NM(pll, sg.NmPerLongitude)
-				h := math.Radians(float32(hdg))
-				v := [2]float32{math.Sin(h), math.Cos(h)}
-				v = math.Scale2f(v, float32(dist))
-				p = math.Add2f(p, v)
-				sg.Fixes[fix] = math.NM2LL(p, sg.NmPerLongitude)
+				sg.Fixes[fix] = math.Offset2LL(pll, float32(hdg), float32(dist), sg.NmPerLongitude)
 			}
 		} else if pos, ok := sg.Locate(location); ok {
 			// It's something simple. Check this after FIX@HDG/DIST,
@@ -803,7 +825,7 @@ func (sg *ScenarioGroup) PostDeserialize(multiController bool, e *util.ErrorLogg
 		e.Pop()
 	}
 
-	sg.STARSFacilityAdaptation.PostDeserialize(e, sg)
+	sg.STARSFacilityAdaptation.PostDeserialize(e, sg, manifest)
 
 	for name, volumes := range sg.Airspace.Volumes {
 		for i, vol := range volumes {
@@ -892,14 +914,14 @@ func (sg *ScenarioGroup) PostDeserialize(multiController bool, e *util.ErrorLogg
 	}
 	for name, s := range sg.Scenarios {
 		e.Push("Scenario " + name)
-		s.PostDeserialize(sg, e)
+		s.PostDeserialize(sg, e, manifest)
 		e.Pop()
 	}
 
 	initializeSimConfigurations(sg, simConfigurations, multiController, e)
 }
 
-func (s *STARSFacilityAdaptation) PostDeserialize(e *util.ErrorLogger, sg *ScenarioGroup) {
+func (s *STARSFacilityAdaptation) PostDeserialize(e *util.ErrorLogger, sg *ScenarioGroup, manifest *av.VideoMapManifest) {
 	e.Push("stars_config")
 
 	// Video maps
@@ -908,12 +930,13 @@ func (s *STARSFacilityAdaptation) PostDeserialize(e *util.ErrorLogger, sg *Scena
 			e.ErrorString("video map %q in \"map_labels\" is not in \"stars_maps\"", m)
 		}
 	}
-	if len(s.VideoMapNames) > 0 {
-		// Don't try to validate the map names here since we haven't loaded
-		// the video maps yet. (Chicken and egg: we use the map names when
-		// loading maps to figure out which ones we need rendering command
-		// buffers for, so hence we haven't loaded them at this point.)
-	} else if len(s.ControllerConfigs) > 0 {
+	for _, m := range s.VideoMapNames {
+		if m != "" && !manifest.HasMap(m) {
+			e.ErrorString("video map %q in \"stars_maps\" is not a valid video map", m)
+		}
+	}
+
+	if len(s.ControllerConfigs) > 0 {
 		s.ControllerConfigs = util.CommaKeyExpand(s.ControllerConfigs)
 
 		for ctrl, config := range s.ControllerConfigs {
@@ -935,10 +958,21 @@ func (s *STARSFacilityAdaptation) PostDeserialize(e *util.ErrorLogger, sg *Scena
 					e.ErrorString("default map %q for %q is not included in the controller's "+
 						"\"controller_maps\"", name, ctrl)
 				}
+
+				if !manifest.HasMap(name) {
+					e.ErrorString("video map %q in \"default_maps\" for controller %q is not a valid video map",
+						name, ctrl)
+				}
 			}
+			for _, name := range config.VideoMapNames {
+				if name != "" && !manifest.HasMap(name) {
+					e.ErrorString("video map %q in \"video_maps\" for controller %q is not a valid video map",
+						name, ctrl)
+				}
+			}
+
 			// Make sure all of the control positions are included in at least
-			// one of the scenarios.  As with VideoMapNames, don't try to
-			// validate the map names yet.
+			// one of the scenarios.
 			if !func() bool {
 				for _, sc := range sg.Scenarios {
 					if ctrl == sc.SoloController {
@@ -957,7 +991,7 @@ func (s *STARSFacilityAdaptation) PostDeserialize(e *util.ErrorLogger, sg *Scena
 				e.ErrorString("Control position %q in \"controller_configs\" not found in any of the scenarios", ctrl)
 			}
 		}
-	} else {
+	} else if len(s.VideoMapNames) == 0 {
 		e.ErrorString("Must specify either \"controller_configs\" or \"stars_maps\"")
 	}
 
@@ -1172,6 +1206,78 @@ func (s *STARSFacilityAdaptation) PostDeserialize(e *util.ErrorLogger, sg *Scena
 		}
 	}
 
+	e.Push("\"restriction_areas\"")
+	if len(s.RestrictionAreas) > MaxRestrictionAreas {
+		e.ErrorString("No more than %d restriction areas may be specified; %d were given.",
+			MaxRestrictionAreas, len(s.RestrictionAreas))
+	}
+	for idx := range s.RestrictionAreas {
+		ra := &s.RestrictionAreas[idx]
+
+		// General checks
+		if ra.Title == "" {
+			e.ErrorString("Must define \"title\" for restriction area.")
+		}
+		for i := range 2 {
+			if len(ra.Text[i]) > 32 {
+				e.ErrorString("Maximum of 32 characters per line in \"text\": line %d: %q (%d)",
+					i, ra.Text, len(ra.Text[i]))
+			}
+		}
+		if ra.Closed && len(ra.Vertices) == 0 || len(ra.Vertices[0]) < 3 {
+			e.ErrorString("At least 3 \"vertices\" must be given for a closed restriction area.")
+		}
+		if !ra.Closed && len(ra.Vertices) == 0 || len(ra.Vertices[0]) < 2 {
+			e.ErrorString("At least 2 \"vertices\" must be given for an open restriction area.")
+		}
+		if ra.Color < 0 || ra.Color > 8 {
+			// (We allow 0 for unset and treat it as 1 when we draw.)
+			e.ErrorString("\"color\" must be between 1 and 8 (inclusive).")
+		}
+
+		if len(ra.VerticesUser) > 0 {
+			// Polygons
+			ra.VerticesUser.InitializeLocations(sg, sg.NmPerLongitude, sg.MagneticVariation, e)
+			var verts []math.Point2LL
+			for _, v := range ra.VerticesUser {
+				verts = append(verts, v.Location)
+			}
+
+			ra.Vertices = make([][]math.Point2LL, 1)
+			ra.Vertices[0] = verts
+			ra.UpdateTriangles()
+
+			if ra.TextPosition.IsZero() {
+				ra.TextPosition = ra.AverageVertexPosition()
+			}
+
+			if ra.CircleRadius > 0 {
+				e.ErrorString("Cannot specify both \"circle_radius\" and \"vertices\".")
+			}
+		} else if ra.CircleRadius > 0 {
+			// Circle-related checks
+			if ra.CircleRadius > 125 {
+				e.ErrorString("\"radius\" cannot be larger than 125.")
+			}
+			if ra.CircleCenter.IsZero() {
+				e.ErrorString("Must specify \"circle_center\" if \"circle_radius\" is given.")
+			}
+			if ra.TextPosition.IsZero() {
+				ra.TextPosition = ra.CircleCenter
+			}
+		} else {
+			// Must be text-only
+			if ra.Text[0] != "" || ra.Text[1] != "" && ra.TextPosition.IsZero() {
+				e.ErrorString("Must specify \"text_position\" with restriction area")
+			}
+		}
+
+		if ra.Shaded && ra.CircleRadius == 0 && len(ra.Vertices) == 0 {
+			e.ErrorString("\"shaded\" cannot be specified without \"circle_radius\" or \"vertices\".")
+		}
+	}
+	e.Pop()
+
 	e.Pop() // stars_config
 }
 
@@ -1354,12 +1460,6 @@ func loadScenarioGroup(filesystem fs.FS, path string, e *util.ErrorLogger) *Scen
 	return &s
 }
 
-type RootFS struct{}
-
-func (r RootFS) Open(filename string) (fs.File, error) {
-	return os.Open(filename)
-}
-
 type dbResolver struct{}
 
 func (d *dbResolver) Resolve(s string) (math.Point2LL, error) {
@@ -1382,7 +1482,7 @@ func (d *dbResolver) Resolve(s string) (math.Point2LL, error) {
 // the program will exit if there are any.  We'd rather force any errors
 // due to invalid scenario definitions to be fixed...
 func LoadScenarioGroups(isLocal bool, extraScenarioFilename string, extraVideoMapFilename string,
-	e *util.ErrorLogger, lg *log.Logger) (map[string]map[string]*ScenarioGroup, map[string]map[string]*Configuration, *av.VideoMapLibrary) {
+	e *util.ErrorLogger, lg *log.Logger) (map[string]map[string]*ScenarioGroup, map[string]map[string]*Configuration, map[string]*av.VideoMapManifest) {
 	start := time.Now()
 
 	math.SetLocationResolver(&dbResolver{})
@@ -1390,20 +1490,6 @@ func LoadScenarioGroups(isLocal bool, extraScenarioFilename string, extraVideoMa
 	// First load the scenarios.
 	scenarioGroups := make(map[string]map[string]*ScenarioGroup)
 	simConfigurations := make(map[string]map[string]*Configuration)
-	referencedVideoMaps := make(map[string]map[string]interface{}) // filename -> map name -> used
-	updateReferencedMaps := func(fa STARSFacilityAdaptation) {
-		if referencedVideoMaps[fa.VideoMapFile] == nil {
-			referencedVideoMaps[fa.VideoMapFile] = make(map[string]interface{})
-		}
-		for _, m := range fa.VideoMapNames {
-			referencedVideoMaps[fa.VideoMapFile][m] = nil
-		}
-		for _, config := range fa.ControllerConfigs {
-			for _, m := range config.VideoMapNames {
-				referencedVideoMaps[fa.VideoMapFile][m] = nil
-			}
-		}
-	}
 
 	err := util.WalkResources("scenarios", func(path string, d fs.DirEntry, fs fs.FS, err error) error {
 		if err != nil {
@@ -1439,7 +1525,6 @@ func LoadScenarioGroups(isLocal bool, extraScenarioFilename string, extraVideoMa
 				}
 				scenarioGroups[s.TRACON][s.Name] = s
 			}
-			updateReferencedMaps(s.STARSFacilityAdaptation)
 		}
 		return nil
 	})
@@ -1455,7 +1540,7 @@ func LoadScenarioGroups(isLocal bool, extraScenarioFilename string, extraVideoMa
 	if extraScenarioFilename != "" {
 		fs := func() fs.FS {
 			if filepath.IsAbs(extraScenarioFilename) {
-				return RootFS{}
+				return util.RootFS{}
 			} else {
 				return os.DirFS(".")
 			}
@@ -1478,12 +1563,11 @@ func LoadScenarioGroups(isLocal bool, extraScenarioFilename string, extraVideoMa
 						extraScenarioFilename)
 				}
 			}
-			updateReferencedMaps(s.STARSFacilityAdaptation)
 		}
 	}
 
-	// Next load the video maps; we will kick off work to load
-	maplib := av.MakeVideoMapLibrary()
+	// Next load the video map manifests so we can validate the map references in scenarios.
+	mapManifests := make(map[string]*av.VideoMapManifest)
 	err = util.WalkResources("videomaps", func(path string, d fs.DirEntry, fs fs.FS, err error) error {
 		if err != nil {
 			lg.Errorf("error walking videomaps: %v", err)
@@ -1495,10 +1579,10 @@ func LoadScenarioGroups(isLocal bool, extraScenarioFilename string, extraVideoMa
 		}
 
 		if strings.HasSuffix(path, "-videomaps.gob") || strings.HasSuffix(path, "-videomaps.gob.zst") {
-			maplib.AddFile(fs, path, referencedVideoMaps[path], e)
+			mapManifests[path], err = av.LoadVideoMapManifest(path)
 		}
 
-		return nil
+		return err
 	})
 	if err != nil {
 		lg.Errorf("error loading videomaps: %v", err)
@@ -1509,14 +1593,11 @@ func LoadScenarioGroups(isLocal bool, extraScenarioFilename string, extraVideoMa
 
 	// Load the video map specified on the command line, if any.
 	if extraVideoMapFilename != "" {
-		fs := func() fs.FS {
-			if filepath.IsAbs(extraVideoMapFilename) {
-				return RootFS{}
-			} else {
-				return os.DirFS(".")
-			}
-		}()
-		maplib.AddFile(fs, extraVideoMapFilename, referencedVideoMaps[extraVideoMapFilename], e)
+		mapManifests[extraVideoMapFilename], err = av.LoadVideoMapManifest(extraVideoMapFilename)
+		if err != nil {
+			lg.Errorf("%s: %v", extraVideoMapFilename, err)
+			os.Exit(1)
+		}
 	}
 
 	// Final tidying before we return the loaded scenarios.
@@ -1542,20 +1623,13 @@ func LoadScenarioGroups(isLocal bool, extraScenarioFilename string, extraVideoMa
 			fa := &sgroup.STARSFacilityAdaptation
 			if vf := fa.VideoMapFile; vf == "" {
 				e.ErrorString("no \"video_map_file\" specified")
-			} else if !maplib.HaveFile(vf) {
+			} else if manifest, ok := mapManifests[vf]; !ok {
 				e.ErrorString("no manifest for video map %q found. Options: %s", vf,
-					strings.Join(maplib.AvailableFiles(), ", "))
+					strings.Join(util.SortedMapKeys(mapManifests), ", "))
 			} else {
-				for _, name := range fa.VideoMapNames {
-					if name != "" && !maplib.HaveMap(vf, name) {
-						e.ErrorString("video map %q not found. Use -listmaps <path to Zxx-videomaps.gob.zst> to show available video maps for an ARTCC.",
-							name)
-					}
-				}
+				multiController := !isLocal
+				sgroup.PostDeserialize(multiController, e, simConfigurations, manifest)
 			}
-
-			multiController := !isLocal
-			sgroup.PostDeserialize(multiController, e, simConfigurations)
 
 			e.Pop()
 		}
@@ -1587,5 +1661,89 @@ func LoadScenarioGroups(isLocal bool, extraScenarioFilename string, extraVideoMa
 	}
 	lg.Warnf("Missing V2 in performance database: %s", strings.Join(missing, ", "))
 
-	return scenarioGroups, simConfigurations, maplib
+	return scenarioGroups, simConfigurations, mapManifests
+}
+
+///////////////////////////////////////////////////////////////////////////
+// RestrictionArea
+
+func RestrictionAreaFromTFR(tfr av.TFR) RestrictionArea {
+	ra := RestrictionArea{
+		Title:    tfr.LocalName,
+		Vertices: deep.MustCopy(tfr.Points),
+	}
+
+	if len(ra.Title) > 32 {
+		ra.Title = ra.Title[:32]
+	}
+
+	ra.HideId = true
+	ra.Closed = true
+	ra.Shaded = true // ??
+	ra.TextPosition = ra.AverageVertexPosition()
+
+	ra.UpdateTriangles()
+
+	return ra
+}
+
+func (ra *RestrictionArea) AverageVertexPosition() math.Point2LL {
+	var c math.Point2LL
+	var n float32
+	for _, loop := range ra.Vertices {
+		n += float32(len(loop))
+		for _, v := range loop {
+			c = math.Add2f(c, v)
+		}
+	}
+	return math.Scale2f(c, 1/n)
+}
+
+func (ra *RestrictionArea) UpdateTriangles() {
+	if !ra.Closed || !ra.Shaded {
+		ra.Tris = nil
+		return
+	}
+
+	clear(ra.Tris)
+	for _, loop := range ra.Vertices {
+		if len(loop) < 3 {
+			continue
+		}
+
+		vertices := make([]earcut.Vertex, len(loop))
+		for i, v := range loop {
+			vertices[i].P = [2]float64{float64(v[0]), float64(v[1])}
+		}
+
+		for _, tri := range earcut.Triangulate(earcut.Polygon{Rings: [][]earcut.Vertex{vertices}}) {
+			var v32 [3]math.Point2LL
+			for i, v64 := range tri.Vertices {
+				v32[i] = [2]float32{float32(v64.P[0]), float32(v64.P[1])}
+			}
+			ra.Tris = append(ra.Tris, v32)
+		}
+	}
+}
+
+func (ra *RestrictionArea) MoveTo(p math.Point2LL) {
+	if ra.CircleRadius > 0 {
+		// Circle
+		delta := math.Sub2f(p, ra.CircleCenter)
+		ra.CircleCenter = p
+		ra.TextPosition = math.Add2f(ra.TextPosition, delta)
+	} else {
+		pc := ra.TextPosition
+		if pc.IsZero() {
+			pc = ra.AverageVertexPosition()
+		}
+		delta := math.Sub2f(p, pc)
+		ra.TextPosition = p
+
+		for _, loop := range ra.Vertices {
+			for i := range loop {
+				loop[i] = math.Add2f(loop[i], delta)
+			}
+		}
+	}
 }

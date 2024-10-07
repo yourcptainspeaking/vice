@@ -292,3 +292,33 @@ func (p *proxy) CreateOverflight(group string, ac *av.Aircraft) *rpc.Call {
 		Group:           group,
 	}, ac, nil)
 }
+
+func (p *proxy) CreateRestrictionArea(ra RestrictionArea, idx *int) *rpc.Call {
+	return p.Client.Go("Sim.CreateRestrictionArea", &RestrictionAreaArgs{
+		ControllerToken: p.ControllerToken,
+		RestrictionArea: ra,
+	}, idx, nil)
+}
+
+func (p *proxy) UpdateRestrictionArea(idx int, ra RestrictionArea) *rpc.Call {
+	return p.Client.Go("Sim.UpdateRestrictionArea", &RestrictionAreaArgs{
+		ControllerToken: p.ControllerToken,
+		Index:           idx,
+		RestrictionArea: ra,
+	}, nil, nil)
+}
+
+func (p *proxy) DeleteRestrictionArea(idx int) *rpc.Call {
+	return p.Client.Go("Sim.DeleteRestrictionArea", &RestrictionAreaArgs{
+		ControllerToken: p.ControllerToken,
+		Index:           idx,
+	}, nil, nil)
+}
+
+func (p *proxy) GetVideoMapLibrary(filename string, vmf *av.VideoMapLibrary) error {
+	// Synchronous call
+	return p.Client.Call("Sim.GetVideoMapLibrary", &VideoMapsArgs{
+		ControllerToken: p.ControllerToken,
+		Filename:        filename,
+	}, vmf)
+}

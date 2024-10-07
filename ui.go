@@ -317,8 +317,8 @@ func uiInit(r renderer.Renderer, p platform.Platform, config *Config, es *sim.Ev
 	if !config.AskedDiscordOptIn {
 		uiShowDiscordOptInDialog(p, config)
 	}
-	if !config.NotifiedNewCommandSyntax {
-		uiShowNewCommandSyntaxDialog(p, config)
+	if !config.NotifiedTargetGenMode {
+		uiShowTargetGenCommandModeDialog(p, config)
 	}
 }
 
@@ -352,8 +352,8 @@ func uiShowDiscordOptInDialog(p platform.Platform, config *Config) {
 	uiShowModalDialog(NewModalDialogBox(&DiscordOptInModalClient{config: config}, p), true)
 }
 
-func uiShowNewCommandSyntaxDialog(p platform.Platform, config *Config) {
-	client := &NewCommandSyntaxModalClient{notifiedNew: &config.NotifiedNewCommandSyntax}
+func uiShowTargetGenCommandModeDialog(p platform.Platform, config *Config) {
+	client := &NotifyTargetGenModalClient{notifiedNew: &config.NotifiedTargetGenMode}
 	uiShowModalDialog(NewModalDialogBox(client, p), true)
 }
 
@@ -650,7 +650,7 @@ func (c *ConnectModalClient) Title() string { return "New Simulation" }
 
 func (c *ConnectModalClient) Opening() {
 	if c.simConfig == nil {
-		c.simConfig = sim.MakeNewSimConfiguration(c.mgr, &c.config.LastTRACON, c.lg)
+		c.simConfig = sim.MakeNewSimConfiguration(c.mgr, &c.config.LastTRACON, &c.config.TFRCache, c.lg)
 	}
 }
 
@@ -980,17 +980,17 @@ func (d *DiscordOptInModalClient) Draw() int {
 	return -1
 }
 
-type NewCommandSyntaxModalClient struct {
+type NotifyTargetGenModalClient struct {
 	notifiedNew *bool
 }
 
-func (ns *NewCommandSyntaxModalClient) Title() string {
-	return "Aircraft Control Command Syntax Has Changed"
+func (ns *NotifyTargetGenModalClient) Title() string {
+	return "Aircraft Control Command Entry Has Changed"
 }
 
-func (ns *NewCommandSyntaxModalClient) Opening() {}
+func (ns *NotifyTargetGenModalClient) Opening() {}
 
-func (ns *NewCommandSyntaxModalClient) Buttons() []ModalDialogButton {
+func (ns *NotifyTargetGenModalClient) Buttons() []ModalDialogButton {
 	return []ModalDialogButton{
 		ModalDialogButton{
 			text: "Ok",
@@ -1002,16 +1002,16 @@ func (ns *NewCommandSyntaxModalClient) Buttons() []ModalDialogButton {
 	}
 }
 
-func (ns *NewCommandSyntaxModalClient) Draw() int {
+func (ns *NotifyTargetGenModalClient) Draw() int {
 	style := imgui.CurrentStyle()
 	spc := style.ItemSpacing()
 	spc.Y -= 4
 	imgui.PushStyleVarVec2(imgui.StyleVarItemSpacing, spc)
 
-	imgui.Text(`Aircraft control commands are now entered in the messages window`)
-	imgui.Text(`at the bottom of the screen. You can either click on that window`)
-	imgui.Text(`and the STARS window to set where keyboard input should go, or`)
-	imgui.Text(`pressing the TAB key switches between them.`)
+	imgui.Text(`Aircraft control commands are now entered in STARS and not in the messages`)
+	imgui.Text(`window at the bottom of the screen. Enter a semicolon ";" to enable control`)
+	imgui.Text(`command entry mode. Then, either enter a callsign followed by control commands`)
+	imgui.Text(`or enter control commands and click on an aircraft's track to issue an instruction.`)
 
 	imgui.PopStyleVar()
 
@@ -1175,6 +1175,7 @@ func ShowFatalErrorDialog(r renderer.Renderer, p platform.Platform, lg *log.Logg
 
 		p.PostRender()
 	}
+	os.Exit(1)
 }
 
 ///////////////////////////////////////////////////////////////////////////
@@ -1549,7 +1550,7 @@ Either one or both of *A* and *S* may be specified.`, "*CCAMRN/A110+*"},
 	[3]string{"*ID*", `"Ident."`, "*ID*"},
 	[3]string{"*CVS*", `"Climb via the SID"`, "*CVS*"},
 	[3]string{"*DVS*", `"Descend via the STAR"`, "*CVS*"},
-	[3]string{"*P*", `"Toggles Pause/Unpause"`, "*P*"},
+	[3]string{"*P*", `Pauses/unpauses the sim`, "*P*"},
 }
 
 var starsCommands = [][2]string{
@@ -1629,9 +1630,11 @@ func uiDrawKeyboardWindow(c *sim.ControlClient, config *Config) {
 	if selectedCommandTypes == ACControlPrimary || selectedCommandTypes == ACControlSecondary {
 		imgui.Text("\n")
 		uiDrawMarkedupText(ui.font, fixedFont, italicFont, `
-To issue a command to an aircraft, enter one the following commands and then click on an
-aircraft to issue the command. Alternatively, enter the aircraft's callsign with a
-space after it and then enter a command. Multiple commands may be given separated by spaces.
+To issue a command to an aircraft, first type *;* to enter "TGT GEN" mode; *TG* will
+appear in the preview area in the STARS window. Then enter one or more commands and click
+on an aircraft to issue the commands to it. Alternatively, first enter the aircraft's
+callsign with a space after it and then enter a command. Multiple commands may be given
+separated by spaces.
 `)
 		imgui.Text("\n\n")
 		uiDrawMarkedupText(ui.font, fixedFont, italicFont, `

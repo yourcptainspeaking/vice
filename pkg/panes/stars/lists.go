@@ -15,6 +15,7 @@ import (
 	"github.com/mmp/vice/pkg/math"
 	"github.com/mmp/vice/pkg/panes"
 	"github.com/mmp/vice/pkg/renderer"
+	"github.com/mmp/vice/pkg/sim"
 	"github.com/mmp/vice/pkg/util"
 )
 
@@ -45,6 +46,7 @@ func (sp *STARSPane) drawSystemLists(aircraft []*av.Aircraft, ctx *panes.Context
 	sp.drawAlertList(ctx, normalizedToWindow(ps.AlertList.Position), aircraft, listStyle, td)
 	sp.drawCoastList(ctx, normalizedToWindow(ps.CoastList.Position), listStyle, td)
 	sp.drawMapsList(ctx, normalizedToWindow(ps.VideoMapsList.Position), listStyle, td)
+	sp.drawRestrictionAreasList(ctx, normalizedToWindow(ps.RestrictionAreaList.Position), listStyle, td)
 	sp.drawCRDAStatusList(ctx, normalizedToWindow(ps.CRDAStatusList.Position), aircraft, listStyle, td)
 
 	towerListAirports := ctx.ControlClient.TowerListAirports()
@@ -104,7 +106,13 @@ func (sp *STARSPane) drawPreviewArea(pw [2]float32, font *renderer.Font, td *ren
 	case CommandModePref:
 		text.WriteString("PREF SET\n")
 	case CommandModeReleaseDeparture:
-		text.WriteString("RD")
+		text.WriteString("RD\n")
+	case CommandModeRestrictionArea:
+		text.WriteString("AR\n")
+	case CommandModeTargetGen:
+		text.WriteString("TG ")
+		text.WriteString(sp.targetGenLastCallsign)
+		text.WriteString("\n")
 	}
 	text.WriteString(strings.Join(strings.Fields(sp.previewAreaInput), "\n")) // spaces are rendered as newlines
 	if text.Len() > 0 {
@@ -552,43 +560,93 @@ func (sp *STARSPane) drawMapsList(ctx *panes.Context, pw [2]float32, style rende
 			return
 		}
 		_, vis := ps.VideoMapVisible[m.Id]
-		text.WriteString(util.Select(vis, ">", " ") + " ")
+		text.WriteString(util.Select(vis, ">", " "))
 		text.WriteString(fmt.Sprintf("%3d ", m.Id))
 		text.WriteString(fmt.Sprintf("%-8s ", strings.ToUpper(m.Label)))
 		text.WriteString(strings.ToUpper(m.Name) + "\n")
 	}
 
-	switch ps.VideoMapsList.Selection {
-	case VideoMapsGroupGeo:
-		text.WriteString("GEOGRAPHIC MAPS\n")
-		m := util.DuplicateSlice(sp.videoMaps)
-		slices.SortFunc(m, func(a, b av.VideoMap) int { return a.Id - b.Id })
-		for _, vm := range m {
-			format(vm)
-		}
+	mapTitles := [VideoMapNumCategories]string{
+		VideoMapGeographicMaps:     "GEOGRAPHIC MAPS",
+		VideoMapControlledAirspace: "CONTROLLED AIRSPACE",
+		VideoMapRunwayExtensions:   "RUNWAY EXTENSIONS",
+		VideoMapDangerAreas:        "DANGER AREAS",
+		VideoMapAerodromes:         "AERODROMES",
+		VideoMapGeneralAviation:    "GENERAL AVIATION",
+		VideoMapSIDsSTARs:          "SIDS/STARS",
+		VideoMapMilitary:           "MILITARY",
+		VideoMapGeographicPoints:   "GEOGRAPHIC POINTS",
+		VideoMapProcessingAreas:    "PROCESSING AREAS",
+		VideoMapCurrent:            "MAPS",
+	}
 
-	case VideoMapsGroupSysProc:
-		text.WriteString("PROCESSING AREAS\n")
-		for _, index := range util.SortedMapKeys(sp.systemMaps) {
-			format(sp.systemMaps[index])
-		}
-
-	case VideoMapsGroupCurrent:
-		text.WriteString("MAPS\n")
-		for _, id := range util.SortedMapKeys(ps.VideoMapVisible) {
-			if idx := slices.IndexFunc(sp.videoMaps, func(v av.VideoMap) bool { return v.Id == id }); idx != -1 {
-				format(sp.videoMaps[idx])
-			} else if vm, ok := sp.systemMaps[id]; ok {
-				format(vm)
+	text.WriteString(mapTitles[ps.VideoMapsList.Selection])
+	text.WriteByte('\n')
+	var m []av.VideoMap
+	if ps.VideoMapsList.Selection == VideoMapCurrent {
+		for _, vm := range sp.allVideoMaps {
+			if _, ok := ps.VideoMapVisible[vm.Id]; ok {
+				m = append(m, vm)
 			}
 		}
-	default:
-		ctx.Lg.Errorf("%d: unhandled VideoMapsList.Selection", ps.VideoMapsList.Selection)
+	} else {
+		for _, vm := range sp.allVideoMaps {
+			if vm.Category == int(ps.VideoMapsList.Selection) {
+				m = append(m, vm)
+			}
+		}
 	}
 
-	if text.Len() > 0 {
-		td.AddText(text.String(), pw, style)
+	// Sort by number
+	slices.SortFunc(m, func(a, b av.VideoMap) int { return a.Id - b.Id })
+
+	// If more than 50, only display the first 50.
+	if len(m) > 50 {
+		m = m[:50]
 	}
+
+	for _, vm := range m {
+		format(vm)
+	}
+
+	td.AddText(text.String(), pw, style)
+}
+
+func (sp *STARSPane) drawRestrictionAreasList(ctx *panes.Context, pw [2]float32, style renderer.TextStyle, td *renderer.TextDrawBuilder) {
+	ps := sp.currentPrefs()
+	if !ps.RestrictionAreaList.Visible {
+		return
+	}
+
+	var text strings.Builder
+	text.WriteString("GEO RESTRICTIONS\n")
+
+	add := func(ra sim.RestrictionArea, idx int) {
+		if ra.Deleted {
+			return
+		}
+		if settings, ok := ps.RestrictionAreaSettings[idx]; ok && settings.Visible {
+			text.WriteByte('>')
+		} else {
+			text.WriteByte(' ')
+		}
+		text.WriteString(fmt.Sprintf("%-3d ", idx))
+		if ra.Title != "" {
+			text.WriteString(strings.ToUpper(ra.Title))
+		} else {
+			text.WriteString(strings.ToUpper(ra.Text[0]))
+		}
+		text.WriteByte('\n')
+	}
+
+	for i, ra := range ctx.ControlClient.State.UserRestrictionAreas {
+		add(ra, i+1)
+	}
+	for i, ra := range ctx.ControlClient.State.STARSFacilityAdaptation.RestrictionAreas {
+		add(ra, i+101)
+	}
+
+	td.AddText(text.String(), pw, style)
 }
 
 func (sp *STARSPane) drawCRDAStatusList(ctx *panes.Context, pw [2]float32, aircraft []*av.Aircraft, style renderer.TextStyle,
@@ -692,13 +750,9 @@ func (sp *STARSPane) drawSignOnList(ctx *panes.Context, pw [2]float32, style ren
 func (sp *STARSPane) drawCoordinationLists(ctx *panes.Context, paneExtent math.Extent2D, transforms ScopeTransformations, cb *renderer.CommandBuffer) {
 	ps := sp.currentPrefs()
 	font := sp.systemFont[ps.CharSize.Lists]
-	listStyle := renderer.TextStyle{
+	titleStyle := renderer.TextStyle{
 		Font:  font,
 		Color: ps.Brightness.Lists.ScaleRGB(STARSListColor),
-	}
-	dimStyle := renderer.TextStyle{
-		Font:  font,
-		Color: ps.Brightness.Lists.ScaleRGB(STARSListColor).Scale(0.3),
 	}
 
 	td := renderer.GetTextDrawBuilder()
@@ -711,6 +765,15 @@ func (sp *STARSPane) drawCoordinationLists(ctx *panes.Context, paneExtent math.E
 
 	fa := ctx.ControlClient.STARSFacilityAdaptation
 	for i, cl := range fa.CoordinationLists {
+		listStyle := renderer.TextStyle{
+			Font:  font,
+			Color: ps.Brightness.Lists.ScaleRGB(util.Select(cl.YellowEntries, renderer.RGB{1, 1, 0}, STARSListColor)),
+		}
+		dimStyle := renderer.TextStyle{
+			Font:  font,
+			Color: listStyle.Color.Scale(0.5),
+		}
+
 		// Auto-place the list if we haven't drawn it before
 		list := ps.CoordinationLists[cl.Id]
 		if list == nil {
@@ -745,9 +808,9 @@ func (sp *STARSPane) drawCoordinationLists(ctx *panes.Context, paneExtent math.E
 		blinkDim := halfSeconds&1 == 0
 
 		if list.AutoRelease {
-			pw = td.AddText(strings.ToUpper(cl.Name)+"    AUTO\n", pw, listStyle)
+			pw = td.AddText(strings.ToUpper(cl.Name)+"    AUTO\n", pw, titleStyle)
 		} else {
-			pw = td.AddText(strings.ToUpper(cl.Name)+"\n", pw, listStyle)
+			pw = td.AddText(strings.ToUpper(cl.Name)+"\n", pw, titleStyle)
 		}
 		if len(aircraft) > list.Lines {
 			pw = td.AddText(fmt.Sprintf("MORE: %d/%d\n", list.Lines, len(aircraft)), pw, listStyle)

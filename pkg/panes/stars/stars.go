@@ -48,7 +48,6 @@ var (
 	STARSBackgroundColor    = renderer.RGB{.2, .2, .2} // at 100 contrast
 	STARSListColor          = renderer.RGB{.1, .9, .1}
 	STARSTextAlertColor     = renderer.RGB{1, 0, 0}
-	STARSMapColor           = renderer.RGB{.55, .55, .55}
 	STARSCompassColor       = renderer.RGB{.55, .55, .55}
 	STARSRangeRingColor     = renderer.RGB{.55, .55, .55}
 	STARSTrackBlockColor    = renderer.RGB{0.12, 0.48, 1}
@@ -82,10 +81,13 @@ type STARSPane struct {
 	OldPrefsSelectedPreferenceSet *int          `json:"SelectedPreferenceSet,omitempty"`
 	OldPrefsPreferenceSets        []Preferences `json:"PreferenceSets,omitempty"`
 
-	videoMaps  []av.VideoMap
-	systemMaps map[int]av.VideoMap
+	allVideoMaps []av.VideoMap
+	dcbVideoMaps []*av.VideoMap
 
 	weatherRadar WeatherRadar
+
+	targetGenLastCallsign string
+	lockTargetGenMode     bool
 
 	// Which weather history snapshot to draw: this is always 0 unless the
 	// 'display weather history' command was entered.
@@ -190,6 +192,11 @@ type STARSPane struct {
 		}
 	}
 
+	// An in-progress restriction area.
+	wipRestrictionArea           *sim.RestrictionArea
+	wipRestrictionAreaMousePos   [2]float32 // last click position while defining it
+	wipRestrictionAreaMouseMoved bool       // has moved since last click
+
 	// We won't waste the space to serialize these but reconstruct them on load.
 	significantPoints map[string]sim.SignificantPoint
 	// Store them redundantly in a slice so we can sort them and then
@@ -276,9 +283,19 @@ func (c *STARSConvergingRunways) getRunwaysString() string {
 type VideoMapsGroup int
 
 const (
-	VideoMapsGroupGeo = iota
-	VideoMapsGroupSysProc
-	VideoMapsGroupCurrent
+	VideoMapNoCategory = iota - 1
+	VideoMapGeographicMaps
+	VideoMapControlledAirspace
+	VideoMapRunwayExtensions
+	VideoMapDangerAreas
+	VideoMapAerodromes
+	VideoMapGeneralAviation
+	VideoMapSIDsSTARs
+	VideoMapMilitary
+	VideoMapGeographicPoints
+	VideoMapProcessingAreas
+	VideoMapCurrent
+	VideoMapNumCategories
 )
 
 type DwellMode int
@@ -365,16 +382,16 @@ func (sp *STARSPane) Activate(r renderer.Renderer, p platform.Platform, eventStr
 	sp.capture.enabled = os.Getenv("VICE_CAPTURE") != ""
 }
 
-func (sp *STARSPane) LoadedSim(ss sim.State, pl platform.Platform, lg *log.Logger) {
+func (sp *STARSPane) LoadedSim(client *sim.ControlClient, ss sim.State, pl platform.Platform, lg *log.Logger) {
 	sp.initPrefsForLoadedSim(ss, pl)
 
 	sp.weatherRadar.UpdateCenter(sp.currentPrefs().Center)
 
-	sp.makeMaps(ss, lg)
+	sp.makeMaps(client, ss, lg)
 	sp.makeSignificantPoints(ss)
 }
 
-func (sp *STARSPane) ResetSim(ss sim.State, pl platform.Platform, lg *log.Logger) {
+func (sp *STARSPane) ResetSim(client *sim.ControlClient, ss sim.State, pl platform.Platform, lg *log.Logger) {
 	sp.ConvergingRunways = nil
 	for _, name := range util.SortedMapKeys(ss.Airports) {
 		ap := ss.Airports[name]
@@ -397,7 +414,7 @@ func (sp *STARSPane) ResetSim(ss sim.State, pl platform.Platform, lg *log.Logger
 	// Update maps before resetting the prefs since we may rewrite some map
 	// ids and we want to use the right ones when we're enabling the
 	// default maps.
-	sp.makeMaps(ss, lg)
+	sp.makeMaps(client, ss, lg)
 	sp.makeSignificantPoints(ss)
 
 	sp.resetPrefsForNewSim(ss, pl)
@@ -408,63 +425,60 @@ func (sp *STARSPane) ResetSim(ss sim.State, pl platform.Platform, lg *log.Logger
 	sp.lastHistoryTrackUpdate = time.Time{}
 }
 
-func (sp *STARSPane) makeMaps(ss sim.State, lg *log.Logger) {
-	// Return a VideoMap with the Id field modified so that it doesn't
-	// clash with any of the ids that have already been assigned to other
-	// maps.
-	fixupId := func(vm av.VideoMap) av.VideoMap {
-		// Unused
-		if vm.Name == "" {
-			return vm
-		}
+func (sp *STARSPane) makeMaps(client *sim.ControlClient, ss sim.State, lg *log.Logger) {
+	usedIds := make(map[int]interface{})
 
+	addMap := func(vm av.VideoMap) {
 		for i := range 999 {
 			// See if id is available
 			id := (vm.Id + i) % 1000
 
-			// Disallow it if we have either a system map or a video map
-			// with this id, unless the name matches, in which case we have
-			// a dupe, which is fine.
-			if m, ok := sp.systemMaps[id]; ok && m.Name != vm.Name {
-				continue
+			if _, ok := usedIds[id]; !ok {
+				vm.Id = id
+				sp.allVideoMaps = append(sp.allVideoMaps, vm)
+				return
 			}
-			idx := slices.IndexFunc(sp.videoMaps, func(v av.VideoMap) bool { return v.Id == id })
-			if idx != -1 && sp.videoMaps[idx].Name != vm.Name {
-				continue
-			}
-
-			// This one is fine, so we're done.
-			vm.Id = id
-			break
 		}
-		return vm
+		// Unable to find a free slot!
 	}
 
-	// Start with the video maps associated with the Sim.
-	maps, _ := ss.GetVideoMaps()
-	sp.videoMaps = nil
-	for _, vm := range maps {
-		sp.videoMaps = append(sp.videoMaps, fixupId(vm))
+	vmf, err := ss.GetVideoMapLibrary(client)
+	if err != nil {
+		lg.Errorf("%v", err)
+	}
+	if !vmf.ProvideAllMaps {
+		// Only provide the maps referenced in the DCB (backwards
+		// compatability for the massive whole-ARTCC Z** videomap files.)
+		ctrlMaps, _ := ss.GetControllerVideoMaps()
+		sp.allVideoMaps = util.FilterSlice(vmf.Maps, func(vm av.VideoMap) bool {
+			return slices.Contains(ctrlMaps, vm.Name)
+		})
+	} else {
+		sp.allVideoMaps = vmf.Maps
+	}
+	for _, vm := range sp.allVideoMaps {
+		usedIds[vm.Id] = nil
 	}
 
-	// System maps
-	sp.systemMaps = make(map[int]av.VideoMap)
+	// Make automatic built-in system maps
 	// CA suppression filters
 	csf := av.VideoMap{
-		Label: "ALLCASU",
-		Name:  "ALL CA SUPPRESSION FILTERS",
-		Id:    700,
+		Label:    "ALLCASU",
+		Name:     "ALL CA SUPPRESSION FILTERS",
+		Id:       700,
+		Category: VideoMapProcessingAreas,
 	}
 	for _, vol := range ss.InhibitCAVolumes() {
 		vol.GenerateDrawCommands(&csf.CommandBuffer, ss.NmPerLongitude)
 	}
-	sp.systemMaps[csf.Id] = fixupId(csf)
+	addMap(csf)
 
 	// MVAs
 	mvas := av.VideoMap{
-		Label: ss.TRACON + " MVA",
-		Name:  "ALL MINIMUM VECTORING ALTITUDES",
-		Id:    701,
+		Label:    ss.TRACON + " MVA",
+		Name:     "ALL MINIMUM VECTORING ALTITUDES",
+		Id:       701,
+		Category: VideoMapProcessingAreas,
 	}
 	ld := renderer.GetLinesDrawBuilder()
 	for _, mva := range av.DB.MVAs[ss.TRACON] {
@@ -474,15 +488,16 @@ func (sp *STARSPane) makeMaps(ss sim.State, lg *log.Logger) {
 	}
 	ld.GenerateCommands(&mvas.CommandBuffer)
 	renderer.ReturnLinesDrawBuilder(ld)
-	sp.systemMaps[mvas.Id] = fixupId(mvas)
+	addMap(mvas)
 
 	// Radar maps
 	radarIndex := 801
 	for _, name := range util.SortedMapKeys(ss.RadarSites) {
 		sm := av.VideoMap{
-			Label: name + "RCM",
-			Name:  name + " RADAR COVERAGE MAP",
-			Id:    radarIndex,
+			Label:    name + "RCM",
+			Name:     name + " RADAR COVERAGE MAP",
+			Id:       radarIndex,
+			Category: VideoMapProcessingAreas,
 		}
 
 		site := ss.RadarSites[name]
@@ -490,7 +505,7 @@ func (sp *STARSPane) makeMaps(ss sim.State, lg *log.Logger) {
 		ld.AddLatLongCircle(site.Position, ss.NmPerLongitude, float32(site.PrimaryRange), 360)
 		ld.AddLatLongCircle(site.Position, ss.NmPerLongitude, float32(site.SecondaryRange), 360)
 		ld.GenerateCommands(&sm.CommandBuffer)
-		sp.systemMaps[radarIndex] = fixupId(sm)
+		addMap(sm)
 
 		radarIndex++
 		renderer.ReturnLinesDrawBuilder(ld)
@@ -504,9 +519,10 @@ func (sp *STARSPane) makeMaps(ss sim.State, lg *log.Logger) {
 			vol := ap.ATPAVolumes[rwy]
 
 			sm := av.VideoMap{
-				Label: name + rwy + " VOL",
-				Name:  name + rwy + " ATPA APPROACH VOLUME",
-				Id:    atpaIndex,
+				Label:    name + rwy + " VOL",
+				Name:     name + rwy + " ATPA APPROACH VOLUME",
+				Id:       atpaIndex,
+				Category: VideoMapProcessingAreas,
 			}
 
 			ld := renderer.GetLinesDrawBuilder()
@@ -516,9 +532,20 @@ func (sp *STARSPane) makeMaps(ss sim.State, lg *log.Logger) {
 			}
 			ld.GenerateCommands(&sm.CommandBuffer)
 
-			sp.systemMaps[atpaIndex] = fixupId(sm)
+			addMap(sm)
 			atpaIndex++
 			renderer.ReturnLinesDrawBuilder(ld)
+		}
+	}
+
+	// Start with the video maps associated with the Sim.
+	ctrlMaps, _ := ss.GetControllerVideoMaps()
+	sp.dcbVideoMaps = nil
+	for _, name := range ctrlMaps {
+		if idx := slices.IndexFunc(sp.allVideoMaps, func(v av.VideoMap) bool { return v.Name == name }); idx != -1 && name != "" {
+			sp.dcbVideoMaps = append(sp.dcbVideoMaps, &sp.allVideoMaps[idx])
+		} else {
+			sp.dcbVideoMaps = append(sp.dcbVideoMaps, nil)
 		}
 	}
 }
@@ -610,6 +637,8 @@ func (sp *STARSPane) Draw(ctx *panes.Context, cb *renderer.CommandBuffer) {
 
 	sp.drawCompass(ctx, scopeExtent, transforms, cb)
 
+	sp.drawRestrictionAreas(ctx, transforms, cb)
+
 	// Per-aircraft stuff: tracks, datablocks, vector lines, range rings, ...
 	// Sort the aircraft so that they are always drawn in the same order
 	// (go's map iterator randomization otherwise randomizes the order,
@@ -680,32 +709,297 @@ func (sp *STARSPane) drawWX(ctx *panes.Context, transforms ScopeTransformations,
 		transforms, cb)
 }
 
+const numMapColors = 8
+
+var mapColors [2][numMapColors]renderer.RGB = [2][numMapColors]renderer.RGB{
+	[numMapColors]renderer.RGB{ // Group A
+		renderer.RGBFromUInt8(140, 140, 140),
+		renderer.RGBFromUInt8(0, 255, 255),
+		renderer.RGBFromUInt8(255, 0, 255),
+		renderer.RGBFromUInt8(238, 201, 0),
+		renderer.RGBFromUInt8(238, 106, 80),
+		renderer.RGBFromUInt8(162, 205, 90),
+		renderer.RGBFromUInt8(218, 165, 32),
+		renderer.RGBFromUInt8(72, 118, 255),
+	},
+	[numMapColors]renderer.RGB{ // Group B
+		renderer.RGBFromUInt8(140, 140, 140),
+		renderer.RGBFromUInt8(132, 112, 255),
+		renderer.RGBFromUInt8(118, 238, 198),
+		renderer.RGBFromUInt8(237, 145, 33),
+		renderer.RGBFromUInt8(218, 112, 214),
+		renderer.RGBFromUInt8(238, 180, 180),
+		renderer.RGBFromUInt8(50, 205, 50),
+		renderer.RGBFromUInt8(255, 106, 106),
+	},
+}
+
 func (sp *STARSPane) drawVideoMaps(ctx *panes.Context, transforms ScopeTransformations, cb *renderer.CommandBuffer) {
 	ps := sp.currentPrefs()
 
 	transforms.LoadLatLongViewingMatrices(cb)
 
 	cb.LineWidth(1, ctx.DPIScale)
-	for _, id := range util.SortedMapKeys(ps.VideoMapVisible) {
-		var vm av.VideoMap
-		if idx := slices.IndexFunc(sp.videoMaps, func(v av.VideoMap) bool { return v.Id == id }); idx == -1 {
-			var ok bool
-			vm, ok = sp.systemMaps[id]
-			if !ok {
-				ctx.Lg.Errorf("Video map %d visible but not found?", id)
-				continue
-			}
-		} else {
-			vm = sp.videoMaps[idx]
+	var draw []av.VideoMap
+	for _, vm := range sp.allVideoMaps {
+		if _, ok := ps.VideoMapVisible[vm.Id]; ok {
+			draw = append(draw, vm)
 		}
+	}
+	slices.SortFunc(draw, func(a, b av.VideoMap) int { return a.Id - b.Id })
 
-		color := ps.Brightness.VideoGroupA.ScaleRGB(STARSMapColor)
-		if vm.Group == 1 {
-			color = ps.Brightness.VideoGroupB.ScaleRGB(STARSMapColor)
-		}
+	for _, vm := range draw {
+		brite := util.Select(vm.Group == 0, ps.Brightness.VideoGroupA, ps.Brightness.VideoGroupB)
+		cidx := math.Clamp(vm.Color-1, 0, numMapColors-1) // switch to 0-based indexing
+		color := brite.ScaleRGB(mapColors[vm.Group][cidx])
+
 		cb.SetRGB(color)
 		cb.Call(vm.CommandBuffer)
 	}
+}
+
+var restrictionAreaStipple [32]uint32 = [32]uint32{
+	0b10001000100010001000100010001000,
+	0,
+	0b00100010001000100010001000100010,
+	0,
+	0b10001000100010001000100010001000,
+	0,
+	0b00100010001000100010001000100010,
+	0,
+	0b10001000100010001000100010001000,
+	0,
+	0b00100010001000100010001000100010,
+	0,
+	0b10001000100010001000100010001000,
+	0,
+	0b00100010001000100010001000100010,
+	0,
+	0b10001000100010001000100010001000,
+	0,
+	0b00100010001000100010001000100010,
+	0,
+	0b10001000100010001000100010001000,
+	0,
+	0b00100010001000100010001000100010,
+	0,
+	0b10001000100010001000100010001000,
+	0,
+	0b00100010001000100010001000100010,
+	0,
+	0b10001000100010001000100010001000,
+	0,
+	0b00100010001000100010001000100010,
+	0,
+}
+
+var restrictionAreaHighDPIStipple [32]uint32 = [32]uint32{
+	0b11000000110000001100000011000000,
+	0b11000000110000001100000011000000,
+	0,
+	0,
+	0b00001100000011000000110000001100,
+	0b00001100000011000000110000001100,
+	0,
+	0,
+	0b11000000110000001100000011000000,
+	0b11000000110000001100000011000000,
+	0,
+	0,
+	0b00001100000011000000110000001100,
+	0b00001100000011000000110000001100,
+	0,
+	0,
+	0b11000000110000001100000011000000,
+	0b11000000110000001100000011000000,
+	0,
+	0,
+	0b00001100000011000000110000001100,
+	0b00001100000011000000110000001100,
+	0,
+	0,
+	0b11000000110000001100000011000000,
+	0b11000000110000001100000011000000,
+	0,
+	0,
+	0b00001100000011000000110000001100,
+	0b00001100000011000000110000001100,
+	0,
+	0,
+}
+
+func raGeomColor(ra *sim.RestrictionArea) renderer.RGB {
+	return [9]renderer.RGB{
+		renderer.RGBFromUInt8(255, 255, 0), // double up so 0 by default remains yellow but we have 1-based indexing otherwise
+		renderer.RGBFromUInt8(255, 255, 0),
+		renderer.RGBFromUInt8(0, 255, 255),
+		renderer.RGBFromUInt8(255, 0, 255),
+		renderer.RGBFromUInt8(238, 201, 0),
+		renderer.RGBFromUInt8(238, 106, 80),
+		renderer.RGBFromUInt8(132, 112, 255),
+		renderer.RGBFromUInt8(118, 238, 198),
+		renderer.RGBFromUInt8(50, 205, 50),
+	}[ra.Color]
+}
+
+func (sp *STARSPane) drawWIPRestrictionArea(ctx *panes.Context, transforms ScopeTransformations, cb *renderer.CommandBuffer) {
+	ra := sp.wipRestrictionArea
+	if ra == nil {
+		return
+	}
+	ld := renderer.GetLinesDrawBuilder()
+	defer renderer.ReturnLinesDrawBuilder(ld)
+	var trid *renderer.TrianglesDrawBuilder
+
+	if ra.CircleRadius > 0 {
+		if ra.Shaded {
+			trid = renderer.GetTrianglesDrawBuilder()
+			defer renderer.ReturnTrianglesDrawBuilder(trid)
+			trid.AddLatLongCircle(ra.CircleCenter, ctx.ControlClient.NmPerLongitude, ra.CircleRadius, 90)
+		}
+		ld.AddLatLongCircle(ra.CircleCenter, ctx.ControlClient.NmPerLongitude, ra.CircleRadius, 90)
+	} else if len(ra.Vertices) > 0 && len(ra.Vertices[0]) > 0 {
+		verts := sp.wipRestrictionArea.Vertices[0]
+		for i := range len(verts) - 1 {
+			ld.AddLine(verts[i], verts[i+1])
+		}
+
+		if ctx.Mouse != nil {
+			sp.wipRestrictionAreaMouseMoved = sp.wipRestrictionAreaMouseMoved ||
+				(ctx.Mouse.Pos != sp.wipRestrictionAreaMousePos)
+			// Only draw the line to the mouse cursor if it has moved since we started entering
+			if sp.wipRestrictionAreaMouseMoved && sp.previewAreaInput == "" {
+				pm := transforms.LatLongFromWindowP(ctx.Mouse.Pos)
+				ld.AddLine(verts[len(verts)-1], pm)
+			}
+		}
+	}
+
+	transforms.LoadLatLongViewingMatrices(cb)
+	cb.LineWidth(1, ctx.DPIScale)
+	ps := sp.currentPrefs()
+	color := ps.Brightness.VideoGroupB.ScaleRGB(renderer.RGB{1, 1, 1})
+	cb.SetRGB(color)
+
+	ld.GenerateCommands(cb)
+	if trid != nil {
+		cb.EnablePolygonStipple()
+		trid.GenerateCommands(cb)
+		cb.DisablePolygonStipple()
+	}
+}
+
+func (sp *STARSPane) drawRestrictionAreas(ctx *panes.Context, transforms ScopeTransformations, cb *renderer.CommandBuffer) {
+	sp.drawWIPRestrictionArea(ctx, transforms, cb)
+
+	ps := sp.currentPrefs()
+	draw := make(map[int]*sim.RestrictionArea)
+	for idx, s := range ps.RestrictionAreaSettings {
+		if !s.Visible {
+			continue
+		}
+
+		if ra := getRestrictionAreaByIndex(ctx, idx); ra != nil {
+			draw[idx] = ra
+		}
+	}
+
+	if len(draw) == 0 {
+		return
+	}
+
+	transforms.LoadLatLongViewingMatrices(cb)
+	cb.LineWidth(1, ctx.DPIScale)
+
+	// Draw the geometric bits before the text
+	ld := renderer.GetLinesDrawBuilder()
+	defer renderer.ReturnLinesDrawBuilder(ld)
+	trid := renderer.GetTrianglesDrawBuilder()
+	defer renderer.ReturnTrianglesDrawBuilder(trid)
+
+	if ctx.DPIScale > 1.5 {
+		cb.PolygonStipple(restrictionAreaHighDPIStipple)
+	} else {
+		cb.PolygonStipple(restrictionAreaStipple)
+	}
+
+	for _, idx := range util.SortedMapKeys(draw) {
+		ra := draw[idx]
+
+		ld.Reset()
+		trid.Reset()
+
+		color := ps.Brightness.VideoGroupB.ScaleRGB(raGeomColor(ra))
+		cb.SetRGB(color)
+
+		if ra.CircleRadius > 0 {
+			if ra.Shaded {
+				trid.AddLatLongCircle(ra.CircleCenter, ctx.ControlClient.NmPerLongitude, ra.CircleRadius, 90)
+			}
+			ld.AddLatLongCircle(ra.CircleCenter, ctx.ControlClient.NmPerLongitude, ra.CircleRadius, 90)
+		} else {
+			for _, loop := range ra.Vertices {
+				if nv := len(loop); nv > 0 {
+					for i := range nv - 1 {
+						ld.AddLine(loop[i], loop[i+1])
+					}
+					if ra.Closed {
+						ld.AddLine(loop[nv-1], loop[0])
+					}
+				}
+			}
+			if ra.Shaded {
+				for _, tri := range ra.Tris {
+					trid.AddTriangle(tri[0], tri[1], tri[2])
+				}
+			}
+		}
+		if ra.Shaded {
+			cb.EnablePolygonStipple()
+			trid.GenerateCommands(cb)
+			cb.DisablePolygonStipple()
+		}
+		ld.GenerateCommands(cb)
+	}
+
+	// Draw text
+	td := renderer.GetTextDrawBuilder()
+	defer renderer.ReturnTextDrawBuilder(td)
+	font := sp.systemFont[ps.CharSize.Tools]
+	halfSeconds := ctx.Now.UnixMilli() / 500
+	blinkDim := halfSeconds&1 == 0
+	color := ps.Brightness.VideoGroupB.ScaleRGB(renderer.RGB{1, 1, 0}) // always yellow
+
+	for _, idx := range util.SortedMapKeys(draw) {
+		ra := draw[idx]
+		var text string
+		if !ra.HideId {
+			text = fmt.Sprintf("[%d]", idx)
+		}
+
+		settings := ps.RestrictionAreaSettings[idx]
+		if ra.Text[0] != "" && !settings.HideText {
+			indent := len(text)
+			text += strings.ToUpper(ra.Text[0])
+			if ra.Text[1] != "" {
+				text += "\n"
+				if indent > 0 {
+					text += fmt.Sprintf("%*c", indent, ' ')
+				}
+				text += strings.ToUpper(ra.Text[1])
+			}
+		}
+
+		p := transforms.WindowFromLatLongP(ra.TextPosition)
+		blinking := settings.ForceBlinkingText || (ra.BlinkingText && !settings.StopBlinkingText)
+		if blinking && blinkDim {
+			td.AddTextCentered(text, p, renderer.TextStyle{Font: font, Color: color.Scale(0.5)})
+		} else {
+			td.AddTextCentered(text, p, renderer.TextStyle{Font: font, Color: color})
+		}
+	}
+	transforms.LoadWindowViewingMatrices(cb)
+	td.GenerateCommands(cb)
 }
 
 func (sp *STARSPane) drawCRDARegions(ctx *panes.Context, transforms ScopeTransformations, cb *renderer.CommandBuffer) {
@@ -816,14 +1110,13 @@ func (sp *STARSPane) makeSignificantPoints(ss sim.State) {
 		sp.significantPointsSlice = append(sp.significantPointsSlice, pt)
 	}
 
-	tryAdd := func(name string, short string, desc string, loc math.Point2LL) {
+	tryAdd := func(name string, desc string, loc math.Point2LL) {
 		if _, ok := sp.significantPoints[name]; ok {
 			return
 		}
 
 		pt := sim.SignificantPoint{
 			Name:        name,
-			ShortName:   short,
 			Description: desc,
 			Location:    loc,
 		}
@@ -835,29 +1128,28 @@ func (sp *STARSPane) makeSignificantPoints(ss sim.State) {
 	center := ss.GetInitialCenter()
 	for name, ap := range av.DB.Airports {
 		if math.NMDistance2LL(ap.Location, center) < 250 {
-			shortAp := name
 			if len(name) == 4 && name[0] == 'K' {
-				shortAp = name[1:]
+				name = name[1:]
 			}
-			tryAdd(name, shortAp, name+" AIRPORT", ap.Location)
+			tryAdd(name, name+" AIRPORT", ap.Location)
 
 			for _, rwy := range ap.Runways {
 				// e.g. JFK22LT -> JFK RWY 22L THRESHOLD
-				tryAdd(shortAp+rwy.Id+"T", shortAp, shortAp+" RWY "+rwy.Id+" THRESHOLD", rwy.Threshold)
+				tryAdd(name+rwy.Id+"T", name+" RWY "+rwy.Id+" THRESHOLD", rwy.Threshold)
 			}
 		}
 	}
 
 	for name, nav := range av.DB.Navaids {
 		if math.NMDistance2LL(nav.Location, center) < 250 {
-			tryAdd(name, name+" "+nav.Type, "", nav.Location)
+			tryAdd(name, name+" "+nav.Type, nav.Location)
 		}
 	}
 
 	for name, fix := range av.DB.Fixes {
 		if math.NMDistance2LL(fix.Location, center) < 250 {
 			// FIXME: should be INTERSECTION not WAYPOINT potentially
-			tryAdd(name, name+" WAYPOINT", "", fix.Location)
+			tryAdd(name, name+" WAYPOINT", fix.Location)
 		}
 	}
 

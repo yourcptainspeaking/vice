@@ -101,8 +101,8 @@ type SplitLine struct {
 
 func (s *SplitLine) Activate(renderer.Renderer, platform.Platform, *sim.EventStream, *log.Logger) {}
 func (s *SplitLine) Deactivate()                                                                  {}
-func (s *SplitLine) LoadedSim(sim.State, platform.Platform, *log.Logger)                          {}
-func (s *SplitLine) ResetSim(sim.State, platform.Platform, *log.Logger)                           {}
+func (s *SplitLine) LoadedSim(*sim.ControlClient, sim.State, platform.Platform, *log.Logger)      {}
+func (s *SplitLine) ResetSim(*sim.ControlClient, sim.State, platform.Platform, *log.Logger)       {}
 func (s *SplitLine) CanTakeKeyboardFocus() bool                                                   { return false }
 func (s *SplitLine) Hide() bool                                                                   { return false }
 
@@ -446,8 +446,19 @@ func DrawPanes(root *DisplayNode, p platform.Platform, r renderer.Renderer, cont
 
 	if wm.focus.Current() == nil || !wmPaneIsPresent(wm.focus.Current(), root) {
 		kp := getKeyboardPanes()
-		focus := kp[0]
-		wm.focus = WMKeyboardFocus{initial: focus, current: focus}
+		// We want to give it to the STARSPane but have to indirect that by
+		// trying not to give it to the messages pane, since we don't have
+		// visibility into STARSPane here.
+		for _, p := range kp {
+			if _, ok := p.(*MessagesPane); !ok {
+				wm.focus = WMKeyboardFocus{initial: p, current: p}
+				break
+			}
+		}
+		if wm.focus.Current() == nil {
+			focus := kp[0]
+			wm.focus = WMKeyboardFocus{initial: focus, current: focus}
+		}
 	}
 
 	// Useful values related to the display size.
@@ -633,14 +644,14 @@ func Activate(root *DisplayNode, r renderer.Renderer, p platform.Platform, event
 	})
 }
 
-func LoadedSim(root *DisplayNode, state sim.State, pl platform.Platform, lg *log.Logger) {
+func LoadedSim(root *DisplayNode, client *sim.ControlClient, state sim.State, pl platform.Platform, lg *log.Logger) {
 	root.VisitPanes(func(p Pane) {
-		p.LoadedSim(state, pl, lg)
+		p.LoadedSim(client, state, pl, lg)
 	})
 }
 
-func ResetSim(root *DisplayNode, state sim.State, pl platform.Platform, lg *log.Logger) {
+func ResetSim(root *DisplayNode, client *sim.ControlClient, state sim.State, pl platform.Platform, lg *log.Logger) {
 	root.VisitPanes(func(p Pane) {
-		p.ResetSim(state, pl, lg)
+		p.ResetSim(client, state, pl, lg)
 	})
 }
