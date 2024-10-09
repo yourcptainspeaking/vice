@@ -637,9 +637,9 @@ func (sp *STARSPane) drawGhosts(ghosts []*av.GhostAircraft, ctx *panes.Context, 
 	ps := sp.currentPrefs()
 	brightness := ps.Brightness.OtherTracks
 	color := brightness.ScaleRGB(STARSGhostColor)
-	trackFont := sp.systemFont[ps.CharSize.PositionSymbols]
+	trackFont := sp.systemFont(ctx, ps.CharSize.PositionSymbols)
 	trackStyle := renderer.TextStyle{Font: trackFont, Color: color, LineSpacing: 0}
-	datablockFont := sp.systemFont[ps.CharSize.Datablocks]
+	datablockFont := sp.systemFont(ctx, ps.CharSize.Datablocks)
 
 	for _, ghost := range ghosts {
 		state := sp.Aircraft[ghost.Callsign]
@@ -753,8 +753,8 @@ func (sp *STARSPane) drawRadarTrack(ac *av.Aircraft, state *AircraftState, headi
 	color, _, posBrightness := sp.trackDatablockColorBrightness(ctx, ac)
 	if posBrightness > 0 {
 		if positionSymbol != "" {
-			font := sp.systemFont[ps.CharSize.PositionSymbols]
-			outlineFont := sp.systemOutlineFont[ps.CharSize.PositionSymbols]
+			font := sp.systemFont(ctx, ps.CharSize.PositionSymbols)
+			outlineFont := sp.systemOutlineFont(ctx, ps.CharSize.PositionSymbols)
 			pt := math.Add2f(pw, [2]float32{0.5, -0.5})
 			td.AddTextCentered(positionSymbol, pt, renderer.TextStyle{Font: outlineFont, Color: renderer.RGB{}})
 
@@ -915,6 +915,12 @@ func (sp *STARSPane) updateCAAircraft(ctx *panes.Context, aircraft []*av.Aircraf
 			if trka == nil || trka.TrackOwner == "" || trkb == nil || trkb.TrackOwner == "" {
 				return false
 			}
+		}
+
+		// No CA if they're in the same ATPA volume; let the ATPA monitor take it
+		va, vb := aca.ATPAVolume(), acb.ATPAVolume()
+		if va != nil && vb != nil && va.Id == vb.Id {
+			return false
 		}
 
 		if inCAVolumes(sa) || inCAVolumes(sb) {
