@@ -346,13 +346,13 @@ func (sp *STARSPane) drawSSAList(ctx *panes.Context, pw [2]float32, tracks []sim
 	}
 
 	// ATIS/GI text. (Note that per 4-44 filter.All does not apply to GI text.)
-	if filter.Text.Main && (ps.ATIS != "" || ps.GIText[0] != "") {
-		pw = td.AddText(rewriteDelta(strings.Join([]string{ps.ATIS, ps.GIText[0]}, " ")), pw, listStyle)
+	if filter.Text.Main && (ps.ATIS[0] != "" || ps.GIText[0] != "") {
+		pw = td.AddText(rewriteDelta(strings.Join([]string{ps.ATIS[0], ps.GIText[0]}, " ")), pw, listStyle)
 		newline()
 	}
 	for i := 1; i < len(ps.GIText); i++ {
-		if filter.Text.GI[i] && ps.GIText[i] != "" {
-			pw = td.AddText(rewriteDelta(ps.GIText[i]), pw, listStyle)
+		if filter.Text.GI[i] && (ps.ATIS[i] != "" || ps.GIText[i] != "") {
+			pw = td.AddText(rewriteDelta(strings.Join([]string{ps.ATIS[i], ps.GIText[i]}, " ")), pw, listStyle)
 			newline()
 		}
 	}

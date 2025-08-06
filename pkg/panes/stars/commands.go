@@ -1659,7 +1659,7 @@ func (sp *STARSPane) executeSTARSCommand(ctx *panes.Context, cmd string, tracks 
 			switch len(cmd) {
 			case 0:
 				// S -> clear atis, first line of text
-				ps.ATIS = ""
+				ps.ATIS[0] = ""
 				ps.GIText[0] = ""
 				status.clear = true
 				return
@@ -1667,18 +1667,19 @@ func (sp *STARSPane) executeSTARSCommand(ctx *panes.Context, cmd string, tracks 
 			case 1:
 				if cmd[0] == '*' {
 					// S* -> clear atis
-					ps.ATIS = ""
+					ps.ATIS[0] = ""
 					status.clear = true
 					return
 				} else if cmd[0] >= '1' && cmd[0] <= '9' {
 					// S[1-9] -> clear corresponding line of text
 					idx := cmd[0] - '1'
 					ps.GIText[idx] = ""
+					ps.ATIS[idx] = ""
 					status.clear = true
 					return
 				} else if cmd[0] >= 'A' && cmd[0] <= 'Z' {
 					// S(atis) -> set atis code
-					ps.ATIS = string(cmd[0])
+					ps.ATIS[0] = string(cmd[0])
 					status.clear = true
 					return
 				} else {
@@ -1686,28 +1687,58 @@ func (sp *STARSPane) executeSTARSCommand(ctx *panes.Context, cmd string, tracks 
 					return
 				}
 
+			case 4:
+				if cmd[0] >= '1' && cmd[0] <= '9' && cmd[2] >= 'A' && cmd[2] <= 'Z' && cmd[3] == '*' {
+					// S[1-9](atis)* -> set corresponding atis, clear gi text
+					idx := cmd[0] - '1'
+					ps.ATIS[idx] = string(cmd[2])
+					ps.GIText[idx] = ""
+					status.clear = true
+					return
+				}
+
 			default:
 				if len(cmd) == 2 && cmd[0] >= 'A' && cmd[0] <= 'Z' && cmd[1] == '*' {
 					// S(atis)* -> set atis, delete first line of text
-					ps.ATIS = string(cmd[0])
+					ps.ATIS[0] = string(cmd[0])
 					ps.GIText[0] = ""
+					status.clear = true
+					return
+				} else if cmd[0] >= '1' && cmd[0] <= '9' && cmd[1] == ' ' && cmd[2] == '*' {
+					// S[1-9]*(text) -> clear corresponding atis, set GI text
+					idx := cmd[0] - '1'
+					ps.ATIS[idx] = ""
+					ps.GIText[idx] = cmd[3:]
+					status.clear = true
+					return
+				} else if cmd[0] >= '1' && cmd[0] <= '9' && cmd[1] == ' ' && cmd[2] == '*' {
+					// S[1-9]*(text) -> clear corresponding atis
+					idx := cmd[0] - '1'
+					ps.ATIS[idx] = ""
 					status.clear = true
 					return
 				} else if cmd[0] == '*' {
 					// S*(text) -> clear atis, set first line of gi text
-					ps.ATIS = ""
+					ps.ATIS[0] = ""
 					ps.GIText[0] = cmd[1:]
 					status.clear = true
 					return
-				} else if cmd[0] >= '1' && cmd[0] <= '9' && cmd[1] == ' ' {
-					// S[1-9](spc)(text) -> set corresponding line of GI text
+				} else if cmd[0] >= '1' && cmd[0] <= '9' && cmd[2] >= 'A' && cmd[2] <= 'Z' && len(cmd) > 3 {
+					// S[1-9](atis)(text) -> set corresponding line auxiliary atis & gi text
 					idx := cmd[0] - '1'
-					ps.GIText[idx] = cmd[2:]
+					ps.ATIS[idx] = string(cmd[2])
+					ps.GIText[idx] = cmd[3:]
+					status.clear = true
+					return
+				} else if cmd[0] >= '1' && cmd[0] <= '9' && cmd[2] >= 'A' && cmd[2] <= 'Z' {
+					// S[1-9](atis) -> set corresponding line auxiliary atis
+					idx := cmd[0] - '1'
+					ps.ATIS[idx] = string(cmd[2])
 					status.clear = true
 					return
 				} else if cmd[0] >= 'A' && cmd[0] <= 'Z' {
-					// S(atis)(text) -> set atis and first line of GI text
-					ps.ATIS = string(cmd[0])
+					// S(atis)(text) -> set atis and first line of gi text
+					ps.ATIS[0] = string(cmd[0])
 					ps.GIText[0] = cmd[1:]
 					status.clear = true
 					return

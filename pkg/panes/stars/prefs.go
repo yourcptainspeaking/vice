@@ -85,7 +85,7 @@ type Preferences struct {
 	UseUserRangeRingsCenter bool `json:"RangeRingsUserCenter"`
 
 	// User-supplied text for the SSA list
-	ATIS   string
+	ATIS   [9]string
 	GIText [9]string
 
 	// If empty, then then MULTI or FUSED mode, depending on
@@ -293,9 +293,9 @@ func (p *Preferences) Reset(ss sim.State, sp *STARSPane) {
 	p.QuickLookPositions = nil
 	p.DisabledQuicklookRegions = nil
 
-	p.ATIS = ""
 	for i := range p.GIText {
 		p.GIText[i] = ""
+		p.ATIS[i] = ""
 	}
 
 	p.RadarSiteSelected = ""
