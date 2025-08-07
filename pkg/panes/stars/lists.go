@@ -263,6 +263,10 @@ func (sp *STARSPane) drawSSAList(ctx *panes.Context, pw [2]float32, tracks []sim
 	td *renderer.TextDrawBuilder, transforms radar.ScopeTransformations, cb *renderer.CommandBuffer) {
 	ps := sp.currentPrefs()
 
+	dimStyle := renderer.TextStyle{
+		Font:  listStyle.Font,
+		Color: listStyle.Color.Scale(0.5),
+	}
 	font := sp.systemFont(ctx, ps.CharSize.Lists)
 	alertStyle := renderer.TextStyle{
 		Font:  font,
@@ -376,12 +380,24 @@ func (sp *STARSPane) drawSSAList(ctx *panes.Context, pw [2]float32, tracks []sim
 
 	// ATIS/GI text. (Note that per 4-44 filter.All does not apply to GI text.)
 	if filter.Text.Main && (ps.ATIS[0] != "" || ps.GIText[0] != "") {
-		pw = td.AddText(rewriteDelta(strings.Join([]string{ps.ATIS[0], getRunwayText(0), ps.GIText[0]}, " ")), pw, listStyle)
+		style := listStyle
+		halfSeconds := ctx.Now.UnixMilli() / 500
+		blinkDim := halfSeconds&1 == 0
+		if sp.blinkGiLines[0] && blinkDim {
+			style = dimStyle
+		}
+		pw = td.AddText(rewriteDelta(strings.Join([]string{ps.ATIS[0], getRunwayText(0), ps.GIText[0]}, " ")), pw, style)
 		newline()
 	}
 	for i := 1; i < len(ps.GIText); i++ {
 		if filter.Text.GI[i] && (ps.ATIS[i] != "" || ps.GIText[i] != "") {
-			pw = td.AddText(rewriteDelta(strings.Join([]string{ps.ATIS[i], getRunwayText(i), ps.GIText[i]}, " ")), pw, listStyle)
+			style := listStyle
+			halfSeconds := ctx.Now.UnixMilli() / 500
+			blinkDim := halfSeconds&1 == 0
+			if sp.blinkGiLines[i] && ctx.FacilityAdaptation.BlinkOnATISChange && blinkDim {
+				style = dimStyle
+			}
+			pw = td.AddText(rewriteDelta(strings.Join([]string{ps.ATIS[i], getRunwayText(i), ps.GIText[i]}, " ")), pw, style)
 			newline()
 		}
 	}

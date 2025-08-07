@@ -167,6 +167,7 @@ type STARSPane struct {
 	drawRoutePoints []math.Point2LL
 
 	giLineIdentifiers map[string]int // identifier -> line index (0 based)
+	blinkGiLines      [9]bool        // if true, the line will blink. used for blinking on atis change until acknowledged if the facility is adapted for it
 
 	commandMode       CommandMode
 	multiFuncPrefix   string
@@ -482,6 +483,7 @@ func (sp *STARSPane) ResetSim(client *client.ControlClient, ss sim.State, pl pla
 		}
 	}
 	clear(sp.VFRFPFirstSeen)
+	sp.blinkGiLines = [9]bool{}
 
 	// Update maps before resetting the prefs since we may rewrite some map
 	// ids and we want to use the right ones when we're enabling the

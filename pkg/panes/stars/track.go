@@ -387,7 +387,11 @@ func (sp *STARSPane) processEvents(ctx *panes.Context) {
 
 		case sim.ATISChangedEvent:
 			if !event.ATISManualChange {
-				sp.prefSet.Current.ATIS[sp.giLineIdentifiers[event.Airport[1:]]] = event.ATISCode
+				line := sp.giLineIdentifiers[event.Airport[1:]]
+				sp.prefSet.Current.ATIS[line] = event.ATISCode
+				if ctx.FacilityAdaptation.BlinkOnATISChange {
+					sp.blinkGiLines[line] = true
+				}
 			}
 		}
 	}

@@ -288,6 +288,7 @@ type STARSFacilityAdaptation struct {
 	AirspaceAwareness   []AirspaceAwareness               `json:"airspace_awareness"`
 	ForceQLToSelf       bool                              `json:"force_ql_self"`
 	AllowLongScratchpad bool                              `json:"allow_long_scratchpad"`
+	BlinkOnATISChange   bool                              `json:"blink_on_atis_change"`
 	VideoMapNames       []string                          `json:"stars_maps"`
 	VideoMapLabels      map[string]string                 `json:"map_labels"`
 	ControllerConfigs   map[string]*STARSControllerConfig `json:"controller_configs"`

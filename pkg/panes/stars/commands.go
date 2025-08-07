@@ -602,6 +602,10 @@ func (sp *STARSPane) executeSTARSCommand(ctx *panes.Context, cmd string, tracks 
 				status.clear = true
 				return
 			}
+		case STARSTriangleCharacter:
+			sp.blinkGiLines = [9]bool{}
+			status.clear = true
+			return
 		}
 
 		if len(cmd) == 6 && strings.HasPrefix(cmd, "**") {
