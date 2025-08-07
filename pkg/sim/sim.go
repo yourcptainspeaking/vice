@@ -1194,6 +1194,28 @@ func (s *Sim) updateState() {
 			}
 		}
 
+		for airport, atis := range s.State.ATISCodes {
+			updated := s.State.ATISUpdated[airport]
+
+			// TODO: how often should atis be updated? (also add some randomness so they don't all update at the same time)
+			if now.Sub(updated) >= time.Minute {
+				s.State.ATISUpdated[airport] = s.lastSimUpdate
+				char := atis[0]
+
+				if char == 'Z' {
+					s.State.ATISCodes[airport] = "A"
+				} else {
+					s.State.ATISCodes[airport] = string(atis[0] + 1)
+				}
+				s.eventStream.Post(Event{
+					Type:             ATISChangedEvent,
+					Airport:          airport,
+					ATISCode:         s.State.ATISCodes[airport],
+					ATISManualChange: false,
+				})
+			}
+		}
+
 		s.possiblyRequestFlightFollowing()
 
 		// Handle assorted deferred radio calls.

@@ -654,7 +654,7 @@ func (nav *Nav) DepartureMessage() *speech.RadioTransmission {
 	}
 }
 
-func (nav *Nav) ContactMessage(reportingPoints []av.ReportingPoint, star string) *speech.RadioTransmission {
+func (nav *Nav) ContactMessage(reportingPoints []av.ReportingPoint, star string, atis string) *speech.RadioTransmission {
 	var resp speech.RadioTransmission
 
 	if hdg, ok := nav.AssignedHeading(); ok {
@@ -677,6 +677,7 @@ func (nav *Nav) ContactMessage(reportingPoints []av.ReportingPoint, star string)
 		resp.Add("assigned {spd}", *nav.Speed.Assigned)
 	}
 
+	resp.Add("with information {ch}", atis)
 	return &resp
 }
 

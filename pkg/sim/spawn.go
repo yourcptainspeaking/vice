@@ -1097,7 +1097,7 @@ func (s *Sim) createArrivalNoLock(group string, arrivalAirport string) (*Aircraf
 	ac.InitializeFlightPlan(av.FlightRulesIFR, acType, airline.Airport, arrivalAirport)
 
 	err := ac.InitializeArrival(s.State.Airports[arrivalAirport], &arr,
-		s.State.NmPerLongitude, s.State.MagneticVariation, s.State.WX, s.State.SimTime, s.lg)
+		s.State.NmPerLongitude, s.State.MagneticVariation, s.State.WX, s.State.SimTime, s.State.ATISCodes[arrivalAirport], s.lg)
 	if err != nil {
 		return nil, err
 	}

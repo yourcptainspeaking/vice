@@ -166,6 +166,8 @@ type STARSPane struct {
 
 	drawRoutePoints []math.Point2LL
 
+	giLineIdentifiers map[string]int // identifier -> line index (0 based)
+
 	commandMode       CommandMode
 	multiFuncPrefix   string
 	previewAreaOutput string
@@ -456,6 +458,18 @@ func (sp *STARSPane) Activate(r renderer.Renderer, p platform.Platform, eventStr
 
 func (sp *STARSPane) LoadedSim(client *client.ControlClient, ss sim.State, pl platform.Platform, lg *log.Logger) {
 	sp.DisplayRequestedAltitude = client.State.STARSFacilityAdaptation.FDB.DisplayRequestedAltitude
+
+	// Initialize GI text line identifiers for airports
+	sp.giLineIdentifiers = make(map[string]int)
+	sp.giLineIdentifiers[ss.PrimaryAirport[1:]] = 0
+	idx := 1
+	for name := range ss.Airports {
+		if name == ss.PrimaryAirport {
+			continue // skip the primary airport, it was already set above
+		}
+		sp.giLineIdentifiers[name[1:]] = idx
+		idx++
+	}
 
 	sp.initPrefsForLoadedSim(ss, pl)
 	sp.weatherRadar.UpdateCenter(sp.currentPrefs().DefaultCenter)

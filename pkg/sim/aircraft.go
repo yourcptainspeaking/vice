@@ -44,6 +44,7 @@ type Aircraft struct {
 	STAR                string
 	STARRunwayWaypoints map[string]av.WaypointArray
 	GotContactTower     bool
+	ATIS                string
 
 	STARSFlightPlan *STARSFlightPlan
 
@@ -268,7 +269,8 @@ func (ac *Aircraft) InterceptApproach(lg *log.Logger) *speech.RadioTransmission 
 }
 
 func (ac *Aircraft) InitializeArrival(ap *av.Airport, arr *av.Arrival, nmPerLongitude float32, magneticVariation float32,
-	wx *av.WeatherModel, now time.Time, lg *log.Logger) error {
+	wx *av.WeatherModel, now time.Time, atis string, lg *log.Logger) error {
+	ac.ATIS = atis
 	ac.STAR = arr.STAR
 	ac.STARRunwayWaypoints = arr.RunwayWaypoints[ac.FlightPlan.ArrivalAirport]
 
@@ -411,7 +413,7 @@ func (ac *Aircraft) NavSummary(wx *av.WeatherModel, lg *log.Logger) string {
 }
 
 func (ac *Aircraft) ContactMessage(reportingPoints []av.ReportingPoint) *speech.RadioTransmission {
-	return ac.Nav.ContactMessage(reportingPoints, ac.STAR)
+	return ac.Nav.ContactMessage(reportingPoints, ac.STAR, ac.ATIS)
 }
 
 func (ac *Aircraft) DepartOnCourse(lg *log.Logger) {

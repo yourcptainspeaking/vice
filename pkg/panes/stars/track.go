@@ -384,6 +384,11 @@ func (sp *STARSPane) processEvents(ctx *panes.Context) {
 			if state, ok := sp.trackStateForACID(ctx, event.ACID); ok {
 				state.IFFlashing = false
 			}
+
+		case sim.ATISChangedEvent:
+			if !event.ATISManualChange {
+				sp.prefSet.Current.ATIS[sp.giLineIdentifiers[event.Airport[1:]]] = event.ATISCode
+			}
 		}
 	}
 }

@@ -205,6 +205,7 @@ const (
 	TransferRejectedEvent
 	RecalledPointOutEvent
 	FlightPlanAssociatedEvent
+	ATISChangedEvent
 	NumEventTypes
 )
 
@@ -214,7 +215,7 @@ func (t EventType) String() string {
 		"RejectedHandoff", "RadioTransmission", "StatusMessage", "ServerBroadcastMessage",
 		"GlobalMessage", "AcknowledgedPointOut", "RejectedPointOut", "HandoffControl",
 		"SetGlobalLeaderLine", "ForceQL", "TransferAccepted", "TransferRejected",
-		"RecalledPointOut", "FlightPlanAssociated"}[t]
+		"RecalledPointOut", "FlightPlanAssociated", "ATISChanged"}[t]
 }
 
 type Event struct {
@@ -227,6 +228,9 @@ type Event struct {
 	SpokenText            string
 	RadioTransmissionType speech.RadioTransmissionType   // For radio transmissions only
 	LeaderLineDirection   *math.CardinalOrdinalDirection // SetGlobalLeaderLineEvent
+	Airport               string
+	ATISCode              string // ATISChangedEvent
+	ATISManualChange      bool   // ATISChangedEvent
 }
 
 func (e *Event) String() string {
