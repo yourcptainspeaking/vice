@@ -459,23 +459,12 @@ func (sp *STARSPane) Activate(r renderer.Renderer, p platform.Platform, eventStr
 func (sp *STARSPane) LoadedSim(client *client.ControlClient, ss sim.State, pl platform.Platform, lg *log.Logger) {
 	sp.DisplayRequestedAltitude = client.State.STARSFacilityAdaptation.FDB.DisplayRequestedAltitude
 
-	// Initialize GI text line identifiers for airports
-	sp.giLineIdentifiers = make(map[string]int)
-	sp.giLineIdentifiers[ss.PrimaryAirport[1:]] = 0
-	idx := 1
-	for name := range ss.Airports {
-		if name == ss.PrimaryAirport {
-			continue // skip the primary airport, it was already set above
-		}
-		sp.giLineIdentifiers[name[1:]] = idx
-		idx++
-	}
-
 	sp.initPrefsForLoadedSim(ss, pl)
 	sp.weatherRadar.UpdateCenter(sp.currentPrefs().DefaultCenter)
 
 	sp.makeMaps(client, ss, lg)
 	sp.makeSignificantPoints(ss)
+	sp.makeGILineIdentifiers(ss)
 }
 
 func (sp *STARSPane) ResetSim(client *client.ControlClient, ss sim.State, pl platform.Platform, lg *log.Logger) {
@@ -499,6 +488,7 @@ func (sp *STARSPane) ResetSim(client *client.ControlClient, ss sim.State, pl pla
 	// default maps.
 	sp.makeMaps(client, ss, lg)
 	sp.makeSignificantPoints(ss)
+	sp.makeGILineIdentifiers(ss)
 
 	sp.resetPrefsForNewSim(ss, pl)
 
@@ -1327,6 +1317,25 @@ func (sp *STARSPane) makeSignificantPoints(ss sim.State) {
 	slices.SortFunc(sp.significantPointsSlice, func(a, b sim.SignificantPoint) int {
 		return strings.Compare(a.Name, b.Name)
 	})
+}
+
+func (sp *STARSPane) makeGILineIdentifiers(ss sim.State) {
+	sp.giLineIdentifiers = make(map[string]int)
+	sp.giLineIdentifiers[ss.PrimaryAirport[1:]] = 0
+	idx := 1
+	for name := range ss.Airports {
+		if name == ss.PrimaryAirport {
+			continue // skip the primary airport, it was already set above
+		}
+
+		// only 9 GI lines
+		if idx < 9 {
+			sp.giLineIdentifiers[name[1:]] = idx
+			idx++
+		} else {
+			break
+		}
+	}
 }
 
 const (

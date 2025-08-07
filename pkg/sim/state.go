@@ -210,7 +210,6 @@ func newState(config NewSimConfiguration, startTime time.Time, manifest *VideoMa
 		ss.DepartureAirports[name] = nil
 	}
 	for name, ap := range ss.Airports {
-		// FIXME: ATIS codes start at "E"
 		ss.ATISCodes[name] = "A" // TODO: randomize this
 		ss.ATISUpdated[name] = startTime
 		if ap.VFRRateSum() > 0 {

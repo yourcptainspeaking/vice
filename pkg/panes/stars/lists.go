@@ -345,14 +345,43 @@ func (sp *STARSPane) drawSSAList(ctx *panes.Context, pw [2]float32, tracks []sim
 		newline()
 	}
 
+	// used to display the active runways before GI text (STARS manual 5-55)
+	// TODO: should probably only do this when the atis updates and store it somewhere
+	getRunwayText := func(line int) string {
+		for lineIdent, idx := range sp.giLineIdentifiers {
+			// find the corresponding airport for the line
+			if line == idx {
+				ss := ctx.Client.State
+				apIdent := "K" + lineIdent // line identifiers are just the last 3 characters, add the K
+				ap := ss.Airports[apIdent]
+				if ap != nil {
+					runways := make([]string, 2) // only 1 primary + 1 secondary can be added
+					for _, ar := range ss.ArrivalRunways {
+						if ar.Airport == apIdent {
+							if runways[0] == "" {
+								runways[0] = ar.Runway
+							} else if runways[1] == "" {
+								runways[1] = ar.Runway
+							} else {
+								break // no more space, no need to continue
+							}
+						}
+					}
+					return strings.Join(runways, " ")
+				}
+			}
+		}
+		return "" // didn't find a matching airport
+	}
+
 	// ATIS/GI text. (Note that per 4-44 filter.All does not apply to GI text.)
 	if filter.Text.Main && (ps.ATIS[0] != "" || ps.GIText[0] != "") {
-		pw = td.AddText(rewriteDelta(strings.Join([]string{ps.ATIS[0], ps.GIText[0]}, " ")), pw, listStyle)
+		pw = td.AddText(rewriteDelta(strings.Join([]string{ps.ATIS[0], getRunwayText(0), ps.GIText[0]}, " ")), pw, listStyle)
 		newline()
 	}
 	for i := 1; i < len(ps.GIText); i++ {
 		if filter.Text.GI[i] && (ps.ATIS[i] != "" || ps.GIText[i] != "") {
-			pw = td.AddText(rewriteDelta(strings.Join([]string{ps.ATIS[i], ps.GIText[i]}, " ")), pw, listStyle)
+			pw = td.AddText(rewriteDelta(strings.Join([]string{ps.ATIS[i], getRunwayText(i), ps.GIText[i]}, " ")), pw, listStyle)
 			newline()
 		}
 	}

@@ -1198,7 +1198,7 @@ func (s *Sim) updateState() {
 			updated := s.State.ATISUpdated[airport]
 
 			// TODO: how often should atis be updated? (also add some randomness so they don't all update at the same time)
-			if now.Sub(updated) >= time.Minute {
+			if now.Sub(updated) >= 30*time.Minute {
 				s.State.ATISUpdated[airport] = s.lastSimUpdate
 				char := atis[0]
 
