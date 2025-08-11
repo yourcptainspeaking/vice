@@ -270,6 +270,11 @@ func NewSim(config NewSimConfiguration, manifest *VideoMapManifest, lg *log.Logg
 	startTime := time.Now()
 	s.State = newState(config, startTime, manifest, lg)
 
+	for name := range s.State.Airports {
+		s.State.ATISCodes[name] = rand.SampleSlice(s.Rand, []string{"A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z"})
+		s.State.ATISNextUpdate[name] = startTime.Add(time.Duration(s.Rand.Intn(60)) * time.Minute)
+	}
+
 	return s
 }
 
@@ -1195,11 +1200,10 @@ func (s *Sim) updateState() {
 		}
 
 		for airport, atis := range s.State.ATISCodes {
-			updated := s.State.ATISUpdated[airport]
+			nextUpdate := s.State.ATISNextUpdate[airport]
 
-			// TODO: how often should atis be updated? (also add some randomness so they don't all update at the same time)
-			if now.Sub(updated) >= 30*time.Minute {
-				s.State.ATISUpdated[airport] = s.lastSimUpdate
+			if now.Sub(nextUpdate) >= 0 && s.State.ATISNextUpdate != nil {
+				s.State.ATISNextUpdate[airport] = now.Add(time.Duration(s.Rand.Intn(40)+20) * time.Minute)
 				char := atis[0]
 
 				if char == 'Z' {

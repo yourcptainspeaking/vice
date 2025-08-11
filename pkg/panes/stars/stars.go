@@ -466,6 +466,10 @@ func (sp *STARSPane) LoadedSim(client *client.ControlClient, ss sim.State, pl pl
 	sp.makeMaps(client, ss, lg)
 	sp.makeSignificantPoints(ss)
 	sp.makeGILineIdentifiers(ss)
+
+	for airport, atis := range ss.ATISCodes {
+		sp.prefSet.Current.ATIS[sp.giLineIdentifiers[airport[1:]]] = atis
+	}
 }
 
 func (sp *STARSPane) ResetSim(client *client.ControlClient, ss sim.State, pl platform.Platform, lg *log.Logger) {
@@ -493,6 +497,10 @@ func (sp *STARSPane) ResetSim(client *client.ControlClient, ss sim.State, pl pla
 	sp.makeGILineIdentifiers(ss)
 
 	sp.resetPrefsForNewSim(ss, pl)
+
+	for airport, atis := range ss.ATISCodes {
+		sp.prefSet.Current.ATIS[sp.giLineIdentifiers[airport[1:]]] = atis
+	}
 
 	sp.weatherRadar.UpdateCenter(sp.currentPrefs().DefaultCenter)
 

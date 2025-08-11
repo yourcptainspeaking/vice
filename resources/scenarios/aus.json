@@ -1684,6 +1684,7 @@
 	},
 	"stars_config": {
 		"center": "KAUS",
+		"blink_on_atis_change": true,
 		"filters": {
 			"inhibit_ca": [
 				{
