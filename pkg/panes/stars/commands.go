@@ -1660,6 +1660,13 @@ func (sp *STARSPane) executeSTARSCommand(ctx *panes.Context, cmd string, tracks 
 			}
 
 		case "S":
+			giLineIdent := -1
+			words := strings.Split(cmd, " ")
+			if cmd[0] == '.' {
+				// this is probably a GI line identifier (multiple manual pages, reference 5-59)
+				id := words[0][1:] // drop the leading "."
+				giLineIdent = sp.giLineIdentifiers[id]
+			}
 			switch len(cmd) {
 			case 0:
 				// S -> clear atis, first line of text
@@ -1674,13 +1681,6 @@ func (sp *STARSPane) executeSTARSCommand(ctx *panes.Context, cmd string, tracks 
 					ps.ATIS[0] = ""
 					status.clear = true
 					return
-				} else if cmd[0] >= '1' && cmd[0] <= '9' {
-					// S[1-9] -> clear corresponding line of text
-					idx := cmd[0] - '1'
-					ps.GIText[idx] = ""
-					ps.ATIS[idx] = ""
-					status.clear = true
-					return
 				} else if cmd[0] >= 'A' && cmd[0] <= 'Z' {
 					// S(atis) -> set atis code
 					atis := string(cmd[0])
@@ -1693,22 +1693,6 @@ func (sp *STARSPane) executeSTARSCommand(ctx *panes.Context, cmd string, tracks 
 					return
 				}
 
-			case 4:
-				if cmd[0] >= '1' && cmd[0] <= '9' && cmd[2] >= 'A' && cmd[2] <= 'Z' && cmd[3] == '*' {
-					// S[1-9](atis)* -> set corresponding atis, clear gi text
-					idx := cmd[0] - '1'
-					ap, err := sp.getGILineIdentifier(int(idx))
-					if err != nil {
-						return
-					}
-					atis := string(cmd[2])
-					ps.ATIS[idx] = atis
-					ctx.Client.SetATIS("K"+ap, atis)
-					ps.GIText[idx] = ""
-					status.clear = true
-					return
-				}
-
 			default:
 				if len(cmd) == 2 && cmd[0] >= 'A' && cmd[0] <= 'Z' && cmd[1] == '*' {
 					// S(atis)* -> set atis, delete first line of text
@@ -1718,17 +1702,40 @@ func (sp *STARSPane) executeSTARSCommand(ctx *panes.Context, cmd string, tracks 
 					ps.GIText[0] = ""
 					status.clear = true
 					return
-				} else if cmd[0] >= '1' && cmd[0] <= '9' && cmd[1] == ' ' && cmd[2] == '*' {
-					// S[1-9]*(text) -> clear corresponding atis, set GI text
-					idx := cmd[0] - '1'
-					ps.ATIS[idx] = ""
-					ps.GIText[idx] = cmd[3:]
+				} else if ((cmd[0] >= '1' && cmd[0] <= '9') || giLineIdent > -1) && len(words[1]) == 2 && words[1][0] >= 'A' && words[1][0] <= 'Z' && words[1][1] == '*' {
+					// S[1-9](atis)* -> set corresponding atis, clear gi text
+					idx := giLineIdent
+					if giLineIdent == -1 {
+						idx = int(cmd[0] - '1')
+					}
+					ap, err := sp.getGILineIdentifier(int(idx))
+					if err != nil {
+						return
+					}
+					atis := string(words[1][0])
+					ps.ATIS[idx] = atis
+					ctx.Client.SetATIS("K"+ap, atis)
+					ps.GIText[idx] = ""
 					status.clear = true
 					return
-				} else if cmd[0] >= '1' && cmd[0] <= '9' && cmd[1] == ' ' && cmd[2] == '*' {
-					// S[1-9]*(text) -> clear corresponding atis
-					idx := cmd[0] - '1'
+				} else if ((cmd[0] >= '1' && cmd[0] <= '9') || giLineIdent > -1) && words[1] == "*" {
+					// S[1-9]* -> clear corresponding atis
+					idx := giLineIdent
+					if giLineIdent == -1 {
+						idx = int(cmd[0] - '1')
+					}
 					ps.ATIS[idx] = ""
+					status.clear = true
+					return
+				} else if ((cmd[0] >= '1' && cmd[0] <= '9') || giLineIdent > -1) && words[1][0] == '*' {
+					// S[1-9]*(text) -> clear corresponding atis, set GI text
+					idx := giLineIdent
+					if giLineIdent == -1 {
+						idx = int(cmd[0] - '1')
+					}
+					ps.ATIS[idx] = ""
+					words[1] = strings.Replace(words[1], "*", "", 1)
+					ps.GIText[idx] = strings.Join(words[1:], " ")
 					status.clear = true
 					return
 				} else if cmd[0] == '*' {
@@ -1737,27 +1744,33 @@ func (sp *STARSPane) executeSTARSCommand(ctx *panes.Context, cmd string, tracks 
 					ps.GIText[0] = cmd[1:]
 					status.clear = true
 					return
-				} else if cmd[0] >= '1' && cmd[0] <= '9' && cmd[2] >= 'A' && cmd[2] <= 'Z' && len(cmd) > 3 {
+				} else if ((cmd[0] >= '1' && cmd[0] <= '9') || giLineIdent > -1) && words[1][0] >= 'A' && words[1][0] <= 'Z' && len(words) > 2 {
 					// S[1-9](atis)(text) -> set corresponding line auxiliary atis & gi text
-					idx := cmd[0] - '1'
+					idx := giLineIdent
+					if giLineIdent == -1 {
+						idx = int(cmd[0] - '1')
+					}
 					ap, err := sp.getGILineIdentifier(int(idx))
 					if err != nil {
 						return
 					}
-					atis := string(cmd[2])
+					atis := string(words[1][0])
 					ps.ATIS[idx] = atis
 					ctx.Client.SetATIS("K"+ap, atis)
-					ps.GIText[idx] = cmd[3:]
+					ps.GIText[idx] = strings.Join(words[2:], " ")
 					status.clear = true
 					return
-				} else if cmd[0] >= '1' && cmd[0] <= '9' && cmd[2] >= 'A' && cmd[2] <= 'Z' {
+				} else if ((cmd[0] >= '1' && cmd[0] <= '9') || giLineIdent > -1) && words[1][0] >= 'A' && words[1][0] <= 'Z' {
 					// S[1-9](atis) -> set corresponding line auxiliary atis
-					idx := cmd[0] - '1'
+					idx := giLineIdent
+					if giLineIdent == -1 {
+						idx = int(cmd[0] - '1')
+					}
 					ap, err := sp.getGILineIdentifier(int(idx))
 					if err != nil {
 						return
 					}
-					atis := string(cmd[2])
+					atis := string(words[1][0])
 					ps.ATIS[idx] = atis
 					ctx.Client.SetATIS("K"+ap, atis)
 					status.clear = true
@@ -1768,6 +1781,16 @@ func (sp *STARSPane) executeSTARSCommand(ctx *panes.Context, cmd string, tracks 
 					ps.ATIS[0] = atis
 					ctx.Client.SetATIS(ctx.Client.State.PrimaryAirport, atis)
 					ps.GIText[0] = cmd[1:]
+					status.clear = true
+					return
+				} else if (cmd[0] >= '1' && cmd[0] <= '9') || giLineIdent > -1 {
+					// S[1-9] -> clear corresponding line of text
+					idx := giLineIdent
+					if giLineIdent == -1 {
+						idx = int(cmd[0] - '1')
+					}
+					ps.GIText[idx] = ""
+					ps.ATIS[idx] = ""
 					status.clear = true
 					return
 				} else {
