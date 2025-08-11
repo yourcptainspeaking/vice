@@ -1096,8 +1096,21 @@ func (s *Sim) createArrivalNoLock(group string, arrivalAirport string) (*Aircraf
 
 	ac.InitializeFlightPlan(av.FlightRulesIFR, acType, airline.Airport, arrivalAirport)
 
+	currentAtis := s.State.ATISCodes[arrivalAirport]
+	// 30% chance for a/c to call in with old atis
+	atis, ok := rand.SampleWeighted(s.Rand, []string{currentAtis, string(currentAtis[0] - '1')}, func(s string) int {
+		if s == currentAtis {
+			return 70
+		} else {
+			return 30
+		}
+	})
+	if !ok {
+		atis = currentAtis
+	}
+
 	err := ac.InitializeArrival(s.State.Airports[arrivalAirport], &arr,
-		s.State.NmPerLongitude, s.State.MagneticVariation, s.State.WX, s.State.SimTime, s.State.ATISCodes[arrivalAirport], s.lg)
+		s.State.NmPerLongitude, s.State.MagneticVariation, s.State.WX, s.State.SimTime, atis, s.lg)
 	if err != nil {
 		return nil, err
 	}

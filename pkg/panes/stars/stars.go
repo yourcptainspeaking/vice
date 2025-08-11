@@ -1333,9 +1333,9 @@ func (sp *STARSPane) makeGILineIdentifiers(ss sim.State) {
 	sp.giLineIdentifiers = make(map[string]int)
 	sp.giLineIdentifiers[ss.PrimaryAirport[1:]] = 0
 	idx := 1
-	for name := range ss.Airports {
-		if name == ss.PrimaryAirport {
-			continue // skip the primary airport, it was already set above
+	for name, ap := range ss.Airports {
+		if name == ss.PrimaryAirport || ap.Untowered {
+			continue
 		}
 
 		// only 9 GI lines

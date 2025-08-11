@@ -20,7 +20,8 @@ type Airport struct {
 	Location       math.Point2LL
 	TowerListIndex int `json:"tower_list"`
 
-	Name string `json:"name"`
+	Name      string `json:"name"`
+	Untowered bool   `json:"untowered"` // currently only used to determine whether an airport should have an atis
 
 	Approaches map[string]*Approach `json:"approaches,omitempty"`
 	Departures []Departure          `json:"departures,omitempty"`

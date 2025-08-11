@@ -270,7 +270,10 @@ func NewSim(config NewSimConfiguration, manifest *VideoMapManifest, lg *log.Logg
 	startTime := time.Now()
 	s.State = newState(config, startTime, manifest, lg)
 
-	for name := range s.State.Airports {
+	for name, ap := range s.State.Airports {
+		if ap.Untowered {
+			continue
+		}
 		s.State.ATISCodes[name] = rand.SampleSlice(s.Rand, []string{"A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z"})
 		s.State.ATISNextUpdate[name] = startTime.Add(time.Duration(s.Rand.Intn(60)) * time.Minute)
 	}
