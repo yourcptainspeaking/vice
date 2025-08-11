@@ -230,7 +230,6 @@ type Event struct {
 	LeaderLineDirection   *math.CardinalOrdinalDirection // SetGlobalLeaderLineEvent
 	Airport               string
 	ATISCode              string // ATISChangedEvent
-	ATISManualChange      bool   // ATISChangedEvent
 }
 
 func (e *Event) String() string {

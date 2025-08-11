@@ -984,6 +984,19 @@ func (s *Sim) RejectPointOut(tcp string, acid ACID) error {
 		})
 }
 
+func (s *Sim) SetATIS(airport string, atis string) {
+	s.mu.Lock(s.lg)
+	defer s.mu.Unlock(s.lg)
+
+	s.State.ATISCodes[airport] = atis
+	s.State.ATISNextUpdate[airport] = time.Now().Add(time.Duration(s.Rand.Intn(40)+20) * time.Minute)
+	s.eventStream.Post(Event{
+		Type:     ATISChangedEvent,
+		Airport:  airport,
+		ATISCode: atis,
+	})
+}
+
 func (s *Sim) ReleaseDeparture(tcp string, callsign av.ADSBCallsign) error {
 	s.mu.Lock(s.lg)
 	defer s.mu.Unlock(s.lg)

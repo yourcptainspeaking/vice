@@ -1203,19 +1203,17 @@ func (s *Sim) updateState() {
 			nextUpdate := s.State.ATISNextUpdate[airport]
 
 			if now.Sub(nextUpdate) >= 0 && s.State.ATISNextUpdate != nil {
-				s.State.ATISNextUpdate[airport] = now.Add(time.Duration(s.Rand.Intn(40)+20) * time.Minute)
 				char := atis[0]
 
 				if char == 'Z' {
-					s.State.ATISCodes[airport] = "A"
+					s.SetATIS(airport, "A")
 				} else {
-					s.State.ATISCodes[airport] = string(atis[0] + 1)
+					s.SetATIS(airport, string(atis[0]+1))
 				}
 				s.eventStream.Post(Event{
-					Type:             ATISChangedEvent,
-					Airport:          airport,
-					ATISCode:         s.State.ATISCodes[airport],
-					ATISManualChange: false,
+					Type:     ATISChangedEvent,
+					Airport:  airport,
+					ATISCode: s.State.ATISCodes[airport],
 				})
 			}
 		}

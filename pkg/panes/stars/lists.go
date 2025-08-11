@@ -5,6 +5,7 @@
 package stars
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -351,29 +352,28 @@ func (sp *STARSPane) drawSSAList(ctx *panes.Context, pw [2]float32, tracks []sim
 
 	// used to display the active runways before GI text (STARS manual 5-55)
 	// TODO: should probably only do this when the atis updates and store it somewhere
-	getRunwayText := func(line int) string {
-		for lineIdent, idx := range sp.giLineIdentifiers {
-			// find the corresponding airport for the line
-			if line == idx {
-				ss := ctx.Client.State
-				apIdent := "K" + lineIdent // line identifiers are just the last 3 characters, add the K
-				ap := ss.Airports[apIdent]
-				if ap != nil {
-					runways := make([]string, 2) // only 1 primary + 1 secondary can be added
-					for _, ar := range ss.ArrivalRunways {
-						if ar.Airport == apIdent {
-							if runways[0] == "" {
-								runways[0] = ar.Runway
-							} else if runways[1] == "" {
-								runways[1] = ar.Runway
-							} else {
-								break // no more space, no need to continue
-							}
-						}
+	getRunwayText := func(idx int) string {
+		ss := ctx.Client.State
+		id, err := sp.getGILineIdentifier(idx)
+		if err != nil {
+			return ""
+		}
+		icao := "K" + id
+		ap := ss.Airports[icao]
+		if ap != nil {
+			runways := make([]string, 2) // only 1 primary + 1 secondary can be added
+			for _, ar := range ss.ArrivalRunways {
+				if ar.Airport == icao {
+					if runways[0] == "" {
+						runways[0] = ar.Runway
+					} else if runways[1] == "" {
+						runways[1] = ar.Runway
+					} else {
+						break // no more space, no need to continue
 					}
-					return strings.Join(runways, " ")
 				}
 			}
+			return strings.Join(runways, " ")
 		}
 		return "" // didn't find a matching airport
 	}
@@ -629,6 +629,15 @@ func (sp *STARSPane) drawSSAList(ctx *panes.Context, pw [2]float32, tracks []sim
 			newline()
 		}
 	}
+}
+
+func (sp *STARSPane) getGILineIdentifier(idx int) (string, error) {
+	for id, index := range sp.giLineIdentifiers {
+		if index == idx {
+			return id, nil
+		}
+	}
+	return "", errors.New("no line found")
 }
 
 func getDuplicateBeaconCodes(ctx *panes.Context) map[av.Squawk]interface{} {

@@ -124,6 +124,15 @@ func (c *ControlClient) HandoffTrack(acid sim.ACID, controller string, callback 
 	}, &update, nil), &update, callback))
 }
 
+func (c *ControlClient) SetATIS(airport string, atis string) {
+	var update sim.StateUpdate
+	c.addCall(makeStateUpdateRPCCall(c.client.Go("Sim.SetATIS", &server.SetATISArgs{
+		ControllerToken: c.controllerToken,
+		Airport:         airport,
+		ATIS:            atis,
+	}, &update, nil), &update, nil))
+}
+
 func (c *ControlClient) AcceptHandoff(acid sim.ACID, callback func(error)) {
 	var update sim.StateUpdate
 	c.addCall(makeStateUpdateRPCCall(c.client.Go("Sim.AcceptHandoff", &server.AcceptHandoffArgs{

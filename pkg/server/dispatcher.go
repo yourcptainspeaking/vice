@@ -331,6 +331,24 @@ func (sd *dispatcher) CancelHandoff(ch *CancelHandoffArgs, update *sim.StateUpda
 	}
 }
 
+type SetATISArgs struct {
+	ControllerToken string
+	Airport         string
+	ATIS            string
+}
+
+func (sd *dispatcher) SetATIS(sa *SetATISArgs, update *sim.StateUpdate) error {
+	defer sd.sm.lg.CatchAndReportCrash()
+
+	if ctrl, s, ok := sd.sm.LookupController(sa.ControllerToken); !ok {
+		return ErrNoSimForControllerToken
+	} else {
+		s.SetATIS(sa.Airport, sa.ATIS)
+		s.GetStateUpdate(ctrl.tcp, update)
+		return nil
+	}
+}
+
 type PointOutArgs struct {
 	ControllerToken string
 	ACID            sim.ACID
