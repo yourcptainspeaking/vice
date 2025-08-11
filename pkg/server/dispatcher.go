@@ -736,6 +736,12 @@ func (sd *dispatcher) RunAircraftCommands(cmds *AircraftCommandsArgs, result *Ai
 					rewriteError(err)
 					return nil
 				}
+			} else if len(command) == 3 && command[2] == 'C' {
+				// information [atis] current
+				if err := s.ATISNowCurrent(ctrl.tcp, callsign, string(command[1])); err != nil {
+					rewriteError(err)
+					return nil
+				}
 			} else {
 				rewriteError(ErrInvalidCommandSyntax)
 				return nil

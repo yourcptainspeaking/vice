@@ -1335,6 +1335,16 @@ func (s *Sim) RadarServicesTerminated(tcp string, callsign av.ADSBCallsign) erro
 		})
 }
 
+func (s *Sim) ATISNowCurrent(tcp string, callsign av.ADSBCallsign, atis string) error {
+	s.mu.Lock(s.lg)
+	defer s.mu.Unlock(s.lg)
+
+	return s.dispatchControlledAircraftCommand(tcp, callsign, func(tcp string, ac *Aircraft) *speech.RadioTransmission {
+		ac.ATIS = atis
+		return speech.MakeReadbackTransmission("Roger, [we'll get|we have] {ch}", atis)
+	})
+}
+
 ///////////////////////////////////////////////////////////////////////////
 // Deferred operations
 
